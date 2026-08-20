@@ -93,16 +93,40 @@ const API = {
   },
 
   formatarMensagem(d) {
-    let msg = `🏢 *${d.empresa}* — ${d.segmento || '-'}\n`;
-    msg += `📍 ${d.cidadeBairro || '-'}\n\n`;
-    msg += `💻 *Sistema*: ${d.qualSistema || '-'} | R$ ${d.mensalidade || '-'}\n`;
-    msg += `🔧 Suporte: ${d.suporteBom || '-'}\n`;
-    msg += `💬 *Dor*: ${d.faltas || '-'}\n\n`;
-    msg += `👤 *${d.nomeContato}* (${d.cargo || '-'}) — ${d.zapContato}\n`;
-    msg += `📸 *Troca atendimento?* ${d.trocaAtendimento || '-'} | *Valor?* ${d.trocaValor || '-'}\n`;
-    msg += `📅 Demo: ${d.demo || '-'}\n\n`;
-    msg += `📅 ${d.dataCadastro} | 🎯 ${d.hunter}${d.hunterCelular ? ' (' + d.hunterCelular + ')' : ''}`;
-    return msg;
+    const linhas = [];
+    // Cabeçalho: empresa + segmento (se houver)
+    const titulo = d.segmento ? `🏢 *${d.empresa}* — ${d.segmento}` : `🏢 *${d.empresa}*`;
+    linhas.push(titulo);
+    if (d.cidadeBairro) linhas.push(`📍 ${d.cidadeBairro}`);
+    linhas.push('');
+    // Sistema atual (só se preenchido)
+    const sist = [];
+    if (d.qualSistema) sist.push(`*${d.qualSistema}*`);
+    if (d.mensalidade) sist.push(`R$ ${d.mensalidade}`);
+    if (sist.length) linhas.push(`💻 Sistema: ${sist.join(' · ')}`);
+    if (d.temSistema === 'Não') linhas.push('💻 Sem sistema atualmente');
+    if (d.suporteBom) linhas.push(`🔧 Suporte: ${d.suporteBom}`);
+    if (d.faltas) linhas.push(`💬 Dor: ${d.faltas}`);
+    linhas.push('');
+    // Contato
+    const contato = [];
+    if (d.nomeContato) contato.push(`*${d.nomeContato}*`);
+    if (d.cargo) contato.push(d.cargo);
+    if (d.zapContato) contato.push(d.zapContato);
+    if (contato.length) linhas.push(`👤 ${contato.join(' — ')}`);
+    // Interesse (só o que foi preenchido)
+    const interesse = [];
+    if (d.trocaAtendimento && d.trocaAtendimento !== 'Não') interesse.push(`Troca atendimento: ${d.trocaAtendimento}`);
+    if (d.trocaValor && d.trocaValor !== 'Não') interesse.push(`Troca valor: ${d.trocaValor}`);
+    if (d.demo) interesse.push(`Demo: ${d.demo}`);
+    if (interesse.length) linhas.push(`📌 ${interesse.join(' · ')}`);
+    linhas.push('');
+    // Rodapé
+    const rodape = [];
+    if (d.dataCadastro) rodape.push(d.dataCadastro);
+    rodape.push(`🎯 ${d.hunter || 'Hunter'}`);
+    linhas.push(rodape.join(' | '));
+    return linhas.join('\n').trim();
   },
 
   async enviarParaAPI(mensagem) {

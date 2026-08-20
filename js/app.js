@@ -247,15 +247,20 @@ const App = {
     update();
   },
 
-  // Faz um GET leve no servidor; true se responder rápido
+  // Faz um GET leve no servidor; true se responder rápido (com fallback de endpoint)
   async pingServidor() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 4000);
+    const endpoints = ['/api/health', '/api/scrape/leads?limit=1'];
     try {
-      // Endpoint leve que existe no PocketBase (health)
-      const resp = await fetch('/api/health', { signal: controller.signal, cache: 'no-store' });
+      for (const ep of endpoints) {
+        try {
+          const resp = await fetch(ep, { signal: controller.signal, cache: 'no-store', method: 'GET' });
+          if (resp.ok) { clearTimeout(timeout); return true; }
+        } catch (e) { /* tenta o proximo */ }
+      }
       clearTimeout(timeout);
-      return resp.ok;
+      return false;
     } catch (e) {
       clearTimeout(timeout);
       return false;
