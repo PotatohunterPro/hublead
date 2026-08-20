@@ -178,10 +178,11 @@ const API = {
   },
 
   // ---- MODO MANUAL: envia via WhatsApp do celular (sem Evolution) ----
-  // Gera a mensagem, copia para o clipboard e abre o WhatsApp do contato.
-  // O hunter só toca em enviar/encaminhar. Útil enquanto a Evolution está fora.
+  // Gera a mensagem, copia para o clipboard e abre o WhatsApp.
+  // Destinatário: número fixo de envio (se configurado), senão o contato do lead.
   abrirManual(dados) {
     const msg = this.formatarMensagem(dados);
+    const cfg = this.getConfig();
     // 1) Copia a mensagem formatada para a área de transferência
     const copiar = () => {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -198,13 +199,12 @@ const API = {
       }
     };
     copiar();
-    // 2) Abre o WhatsApp no número do contato do lead (se houver), senão só o app
-    const zap = String(dados.zapContato || '').replace(/\D/g, '');
-    if (zap) {
-      window.open('https://wa.me/' + zap + '?text=' + encodeURIComponent(msg), '_blank');
-    } else {
-      window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
-    }
+    // 2) Escolhe o destinatário: número fixo de envio tem prioridade
+    const numeroFixo = String(cfg.numeroEnvio || '').replace(/\D/g, '');
+    const numeroLead = String(dados.zapContato || '').replace(/\D/g, '');
+    const destino = numeroFixo || numeroLead;
+    const waUrl = destino ? 'https://wa.me/' + destino : 'https://wa.me/';
+    window.open(waUrl + '?text=' + encodeURIComponent(msg), '_blank');
     return msg;
   },
 
