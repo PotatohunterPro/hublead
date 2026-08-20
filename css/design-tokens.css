@@ -1,0 +1,137 @@
+:root {
+  /* Primary — Azul Hub Escuro (topo do hexágono) */
+  --color-accent: #0A5DA8;
+  --color-accent-hover: #0C6BBF;
+  --color-accent-pressed: #084F8F;
+  --color-accent-subtle: rgba(10, 93, 168, 0.12);
+  --color-accent-ring: rgba(10, 93, 168, 0.35);
+
+  /* Secondary — Azul Hub Médio */
+  --color-accent-secondary: #1E88C7;
+  --color-accent-secondary-subtle: rgba(30, 136, 199, 0.14);
+
+  /* Tertiary — Ciano Hub Claro (base do hexágono) */
+  --color-accent-tertiary: #4FC3F7;
+  --color-accent-tertiary-subtle: rgba(79, 195, 247, 0.14);
+
+  /* Neutros (Apple) */
+  --color-background: #f5f5f7;
+  --color-surface: #ffffff;
+  --color-surface-secondary: #fbfbfd;
+  --color-surface-tertiary: #f0f0f2;
+  --color-surface-hover: rgba(0, 0, 0, 0.04);
+  --color-text-primary: #1d1d1f;
+  --color-text-secondary: #6e6e73;
+  --color-text-tertiary: #86868b;
+  --color-separator: #d2d2d7;
+  --color-separator-strong: #b8b8bd;
+
+  /* Semânticas */
+  --color-success: #34c759;
+  --color-success-subtle: rgba(52, 199, 89, 0.14);
+  --color-warning: #ff9f0a;
+  --color-warning-subtle: rgba(255, 159, 10, 0.16);
+  --color-danger: #ff3b30;
+  --color-danger-subtle: rgba(255, 59, 48, 0.14);
+
+  /* Tipografia */
+  --font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  --text-display: 34px;
+  --text-title: 28px;
+  --text-headline: 20px;
+  --text-subhead: 17px;
+  --text-body: 15px;
+  --text-callout: 15px;
+  --text-caption: 13px;
+  --text-caption2: 11px;
+  --text-footnote: 12px;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+
+  /* Espaçamento */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+
+  /* Raio */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xlg: 20px;
+  --radius-pill: 9999px;
+
+  /* Elevação */
+  --elevation-0: none;
+  --elevation-1: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --elevation-2: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --elevation-3: 0 12px 32px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06);
+  --elevation-4: 0 24px 48px rgba(0, 0, 0, 0.16), 0 8px 16px rgba(0, 0, 0, 0.08);
+
+  /* Motion */
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+  --ease-standard: cubic-bezier(0.4, 0.0, 0.2, 1);
+  --ease-enter: cubic-bezier(0.0, 0.0, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0.0, 1, 1);
+
+  /* Layout */
+  --layout-header-height: 56px;
+  --layout-bottom-nav-height: 60px;
+  --layout-content-max-width: 680px;
+
+  /* Z-index scale */
+  --z-header: 100;
+  --z-bottom-nav: 100;
+  --z-overlay: 200;
+  --z-bottom-sheet: 300;
+  --z-toast: 400;
+  --z-splash: 500;
+}
+
+.dark {
+  --color-accent: #4FA8E3;
+  --color-accent-hover: #6BB8EC;
+  --color-accent-pressed: #3A94D4;
+  --color-accent-subtle: rgba(79, 168, 227, 0.18);
+  --color-accent-ring: rgba(79, 168, 227, 0.45);
+  --color-accent-secondary: #5BB8D9;
+  --color-accent-secondary-subtle: rgba(91, 184, 217, 0.18);
+  --color-accent-tertiary: #7DD3FC;
+  --color-accent-tertiary-subtle: rgba(125, 211, 252, 0.18);
+
+  --color-background: #0b0b0d;
+  --color-surface: #151517;
+  --color-surface-secondary: #1c1c1f;
+  --color-surface-tertiary: #232326;
+  --color-surface-hover: rgba(255, 255, 255, 0.06);
+  --color-text-primary: #f5f5f7;
+  --color-text-secondary: #a1a1a6;
+  --color-text-tertiary: #6e6e73;
+  --color-separator: #38383a;
+  --color-separator-strong: #48484a;
+
+  --elevation-1: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.2);
+  --elevation-2: 0 4px 12px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.2);
+  --elevation-3: 0 12px 32px rgba(0, 0, 0, 0.5), 0 4px 8px rgba(0, 0, 0, 0.3);
+  --elevation-4: 0 24px 48px rgba(0, 0, 0, 0.6), 0 8px 16px rgba(0, 0, 0, 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

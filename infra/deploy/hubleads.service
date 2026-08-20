@@ -1,0 +1,24 @@
+# ============================================
+# Hub Leads — Unit file do systemd
+# Garante que a stack suba com o sistema
+# ============================================
+[Unit]
+Description=Hub Leads Docker Compose Stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/hubleads
+User=hubleads
+Group=docker
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+ExecReload=/usr/bin/docker compose restart
+Restart=no
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

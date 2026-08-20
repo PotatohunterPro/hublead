@@ -1,0 +1,19 @@
+# Secrets e arquivos gerados localmente
+.env
+*.env.local
+infra/.env
+
+# Backups
+backups/
+*.tar.gz
+*.sql
+
+# Logs
+*.log
+install.log
+
+# Sistema
+.DS_Store
+Thumbs.db
+node_modules/
+*.tmp

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 60" width="220" height="60">
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4FA8E3"/>
+      <stop offset="50%" stop-color="#5BB8D9"/>
+      <stop offset="100%" stop-color="#7DD3FC"/>
+    </linearGradient>
+  </defs>
+  <polygon points="30,8 50,20 50,44 30,56 10,44 10,20" fill="url(#g1)" stroke-width="0"/>
+  <polygon points="30,6 52,19 52,45 30,58 8,45 8,19" fill="none" stroke="#4FA8E3" stroke-width="1.5" stroke-linejoin="round"/>
+  <text x="30" y="38" text-anchor="middle" fill="#0b0b0d" font-family="Arial,sans-serif" font-size="18" font-weight="bold">H</text>
+  <text x="62" y="28" fill="#f5f5f7" font-family="Arial,sans-serif" font-size="16" font-weight="bold">HUB</text>
+  <text x="62" y="46" fill="#a1a1a6" font-family="Arial,sans-serif" font-size="12" font-weight="600">SOLUÇÃO</text>
+</svg>

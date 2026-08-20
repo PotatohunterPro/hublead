@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  HUB LEADS — Diagnóstico de saúde
+#  Verifica containers, SSL, DNS, espaço, UFW, logging
+# =============================================================================
+set -Eeuo pipefail
+
+APP_DIR="/opt/hubleads"
+ENV_FILE="${APP_DIR}/.env"
+C_RESET="\e[0m"; C_RED="\e[31m"; C_GREEN="\e[32m"; C_YELLOW="\e[33m"; C_CYAN="\e[36m"
+PASS=0; FAIL=0; WARN=0
+
+check() {
+    local name="$1" status="$2"
+    case "$status" in
+        pass) echo -e "  ${C_GREEN}✓${C_RESET} $name"; PASS=$((PASS+1)) ;;
+        fail) echo -e "  ${C_RED}✗${C_RESET} $name"; FAIL=$((FAIL+1)) ;;
+        warn) echo -e "  ${C_YELLOW}~${C_RESET} $name"; WARN=$((WARN+1)) ;;
+    esac
+}
+
+echo ""
+echo "╔══════════════════════════════════════════╗"
+echo "║     HUB LEADS — Diagnóstico de Saúde     ║"
+echo "╚══════════════════════════════════════════╝"
+echo ""
+
+# 1. Sistema
+echo "── Sistema"
+check "Ubuntu 24.04" "$(grep -q "Ubuntu 24.04" /etc/os-release 2>/dev/null && echo pass || echo warn)"
+check "Swap" "$(swapon --show | grep -q . && echo pass || echo warn)"
+check "Espaço em disco" "$(df -h / | awk 'NR==2{print $5}' | grep -qE '^[0-9]?[0-9]%' && echo pass || echo warn)"
+
+# 2. Docker
+echo "── Docker"
+check "Docker instalado" "$(command -v docker >/dev/null 2>&1 && echo pass || echo fail)"
+check "Docker Compose" "$(docker compose version >/dev/null 2>&1 && echo pass || echo fail)"
+if command -v docker >/dev/null 2>&1; then
+    for c in hubleads-postgres hubleads-pocketbase hubleads-evolution; do
+        if docker ps --format '{{.Names}}' | grep -q "$c"; then
+            check "$c" pass
+        else
+            check "$c" fail
+        fi
+    done
+fi
+
+# 3. Nginx
+echo "── Nginx"
+check "Nginx ativo" "$(systemctl is-active nginx >/dev/null 2>&1 && echo pass || echo fail)"
+check "Site habilitado" "$([ -f /etc/nginx/sites-enabled/hublead.conf ] && echo pass || echo fail)"
+
+# 4. SSL
+echo "── SSL"
+CHECK_CERT=$(certbot certificates 2>/dev/null | grep -c "Certificate Name" || true)
+if [ "$CHECK_CERT" -gt 0 ]; then
+    DOMAIN=$(grep DOMAIN "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "hublead.pradodacostasolucoes.com.br")
+    certbot certificates 2>/dev/null | grep -A2 "$DOMAIN"
+    check "Certificado SSL" pass
+else
+    check "Certificado SSL" warn
+fi
+
+# 5. Portas
+echo "── Portas seguras"
+PUBLIC_PORTS=$(ss -tlnp 2>/dev/null | grep -E "0.0.0.0:|:::" | grep -E ":8080|:8090" || true)
+if [ -z "$PUBLIC_PORTS" ]; then
+    check "8080/8090 não expostas" pass
+else
+    check "8080/8090 expostas" fail
+fi
+
+# 6. UFW
+echo "── UFW"
+check "UFW ativo" "$(ufw status 2>/dev/null | grep -q "Status: active" && echo pass || echo warn)"
+
+# 7. .env
+echo "── Segurança"
+if [ -f "$ENV_FILE" ]; then
+    PERMS=$(stat -c%a "$ENV_FILE" 2>/dev/null || stat -f%p "$ENV_FILE" 2>/dev/null)
+    check ".env existe e modo 600" "$(echo "$PERMS" | grep -qE '600|100600' && echo pass || echo warn)"
+else
+    check ".env não encontrado" fail
+fi
+
+# 8. DNS
+echo "── DNS"
+DOMAIN=$(grep DOMAIN "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "hublead.pradodacostasolucoes.com.br")
+check "Resolução DNS de $DOMAIN" "$(nslookup "$DOMAIN" 2>/dev/null | grep -q 'Address' && echo pass || echo warn)"
+
+# 9. Backup
+echo "── Backup"
+BACKUP_DIR="${APP_DIR}/backups"
+BKP_CNT=$(find "$BACKUP_DIR" -name "hubleads_*.tar.gz" 2>/dev/null | wc -l)
+if [ "$BKP_CNT" -gt 0 ]; then
+    check "Backups disponíveis ($BKP_CNT arquivos)" pass
+else
+    check "Nenhum backup encontrado" warn
+fi
+
+echo ""
+echo "╔══════════════════════════════════════════╗"
+echo "║  Resumo: ${PASS} ok · ${FAIL} falha(s) · ${WARN} aviso(s)  ║"
+echo "╚══════════════════════════════════════════╝"
+echo ""
+
+[ "$FAIL" -eq 0 ] || exit 1
