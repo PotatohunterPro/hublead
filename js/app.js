@@ -233,9 +233,11 @@ const App = {
   initOfflineBar() {
     const bar = document.getElementById('offlineBar');
     if (!bar) return;
-    // Verifica conectividade real (ping no servidor), não só navigator.onLine
-    // (navigator.onLine pode dar falso negativo com SW em cache)
+    // Se estiver rodando local (file:// ou localhost), não tem backend /api —
+    // não é 'offline', é teste local. Não exibe a barra para não confundir.
+    const isLocal = location.protocol === 'file:' || /^localhost|127\.0\.0\.1/.test(location.hostname || '');
     const update = async () => {
+      if (isLocal) { bar.classList.remove('visible'); return; }
       let online = navigator.onLine;
       if (online) {
         // Confirma com um ping real e rápido (timeout curto)
@@ -245,7 +247,6 @@ const App = {
     };
     window.addEventListener('online', update);
     window.addEventListener('offline', update);
-    // Re-checa periodicamente (o navigator.onLine sozinho é pouco confiável)
     this._offlineCheck = setInterval(update, 15000);
     update();
   },
