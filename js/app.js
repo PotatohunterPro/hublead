@@ -230,12 +230,36 @@ const App = {
   initOfflineBar() {
     const bar = document.getElementById('offlineBar');
     if (!bar) return;
-    const update = () => {
-      bar.classList.toggle('visible', !navigator.onLine);
+    // Verifica conectividade real (ping no servidor), não só navigator.onLine
+    // (navigator.onLine pode dar falso negativo com SW em cache)
+    const update = async () => {
+      let online = navigator.onLine;
+      if (online) {
+        // Confirma com um ping real e rápido (timeout curto)
+        online = await this.pingServidor();
+      }
+      bar.classList.toggle('visible', !online);
     };
     window.addEventListener('online', update);
     window.addEventListener('offline', update);
+    // Re-checa periodicamente (o navigator.onLine sozinho é pouco confiável)
+    this._offlineCheck = setInterval(update, 15000);
     update();
+  },
+
+  // Faz um GET leve no servidor; true se responder rápido
+  async pingServidor() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    try {
+      // Endpoint leve que existe no PocketBase (health)
+      const resp = await fetch('/api/health', { signal: controller.signal, cache: 'no-store' });
+      clearTimeout(timeout);
+      return resp.ok;
+    } catch (e) {
+      clearTimeout(timeout);
+      return false;
+    }
   },
 
   initOnlineListener() {

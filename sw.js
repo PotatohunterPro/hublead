@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hubleads-v2';
+const CACHE_NAME = 'hubleads-v3';
 const ASSETS = [
   '/',
   '/index.html',
@@ -41,6 +41,11 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  // API do PocketBase: SEMPRE busca na rede (nunca em cache), p/ dados atualizados
+  if (event.request.url.includes('/api/')) {
+    event.respondWith(fetch(event.request).catch(() => new Response('{}', { status: 503 })));
+    return;
+  }
   if (event.request.url.includes('tile.openstreetmap.org')) {
     event.respondWith(
       caches.match(event.request).then((cached) => {
