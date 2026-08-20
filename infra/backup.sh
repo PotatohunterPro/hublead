@@ -15,6 +15,7 @@ TS="$(date '+%Y%m%d_%H%M%S')"
 C_RESET="\e[0m"; C_RED="\e[31m"; C_GREEN="\e[32m"; C_YELLOW="\e[33m"; C_CYAN="\e[36m"
 info()  { echo -e "${C_CYAN}[hubleads] INFO${C_RESET}  $*"; }
 ok()    { echo -e "${C_GREEN}[hubleads] OK${C_RESET}    $*"; }
+warn()  { echo -e "${C_YELLOW}[hubleads] WARN${C_RESET}  $*"; }
 err()   { echo -e "${C_RED}[hubleads] ERRO${C_RESET}  $*"; }
 
 on_error() { err "Falha na linha $1"; exit 1; }

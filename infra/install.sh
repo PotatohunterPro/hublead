@@ -29,7 +29,7 @@ INSTALL_LOG_FILE="${LOG_FILE}"
 # ----------------------------------------------------------------------------
 C_RESET="\e[0m"; C_RED="\e[31m"; C_GREEN="\e[32m"; C_YELLOW="\e[33m"; C_CYAN="\e[36m"
 
-log()   { local c="$1"; shift; echo -e "${c}[${APP_NAME}]${C_RESET} $*" | tee -a "$LOG_FILE"; }
+log()   { local c="$1"; shift; [ -d "$(dirname "$LOG_FILE")" ] || mkdir -p "$(dirname "$LOG_FILE")"; echo -e "${c}[${APP_NAME}]${C_RESET} $*" | tee -a "$LOG_FILE"; }
 info()  { log "$C_CYAN" "INFO   » $*"; }
 ok()    { log "$C_GREEN" "OK     » $*"; }
 warn()  { log "$C_YELLOW" "WARN   » $*"; }
@@ -53,10 +53,10 @@ snapshot_capture() {
     STATE_SNAPSHOT="$(mktemp)"
     {
         echo "containers:"
-        docker ps -q --filter name=hubleads 2>/dev/null | tr '\n' ' '; echo
+        (docker ps -q --filter name=hubleads 2>/dev/null || true)
         echo "env_present: $([ -f "$ENV_FILE" ] && echo yes || echo no)"
         echo "nginx_site: $([ -f "$NGINX_SITE_ENABLED" ] && echo yes || echo no)"
-        echo "certbot: $(certbot certificates 2>/dev/null | grep -c 'Certificate Name' || echo 0)"
+        echo "certbot: $(certbot certificates 2>/dev/null | grep -c 'Certificate Name' 2>/dev/null || true)"
     } > "$STATE_SNAPSHOT"
     info "Snapshot de estado capturado"
 }
@@ -160,7 +160,7 @@ detect_environment() {
 install_dependencies() {
     info "FASE 3/16 — Dependências"
     apt-get update -qq
-    apt-get install -y -qq curl wget ufw certbot python3-certbot-nginx ca-certificates gnupg lsb-release >/dev/null
+    apt-get install -y -qq curl wget ufw certbot python3-certbot-nginx ca-certificates gnupg lsb-release dnsutils openssl >/dev/null
 
     if ! command -v docker >/dev/null 2>&1; then
         install -m 0755 -d /etc/apt/keyrings
@@ -189,6 +189,11 @@ setup_user() {
     else
         useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
         ok "Usuário ${APP_USER} criado"
+    fi
+    # Necessario para o systemd unit (ExecStart=docker compose) rodar como este usuario
+    if getent group docker >/dev/null 2>&1; then
+        usermod -aG docker "$APP_USER" 2>/dev/null || true
+        ok "Usuário ${APP_USER} adicionado ao grupo docker"
     fi
     mkdir -p "$APP_DIR"
 }
@@ -268,13 +273,22 @@ deploy_files() {
         sed -i 's|\.\./pb_hooks|./pb_hooks|g' "$APP_DIR/compose.yaml"
         chown "$APP_USER":"$APP_USER" "$APP_DIR/compose.yaml"
     fi
+    # Init scripts do Postgres (cria banco evolution no 1o boot)
+    if [ -d "${SCRIPT_DIR}/pg-init" ]; then
+        mkdir -p "$APP_DIR/pg-init"
+        cp -r "${SCRIPT_DIR}/pg-init/." "$APP_DIR/pg-init/"
+        chown "$APP_USER":"$APP_USER" "$APP_DIR/pg-init"
+    fi
     # Frontend (arquivos na RAIZ do projeto: index.html, js/, css/, assets/, sw.js, manifest.json)
     mkdir -p "$WEB_ROOT"
     for f in index.html manifest.json sw.js; do
         [ -f "${PROJECT_ROOT}/${f}" ] && cp "${PROJECT_ROOT}/${f}" "$WEB_ROOT/${f}"
     done
     for d in js css assets; do
-        [ -d "${PROJECT_ROOT}/${d}" ] && cp -r "${PROJECT_ROOT}/${d}/." "$WEB_ROOT/${d}/"
+        if [ -d "${PROJECT_ROOT}/${d}" ]; then
+            mkdir -p "$WEB_ROOT/${d}"
+            cp -r "${PROJECT_ROOT}/${d}/." "$WEB_ROOT/${d}/"
+        fi
     done
     chown -R www-data:www-data "$WEB_ROOT" 2>/dev/null || true
     chmod -R 755 "$WEB_ROOT"
@@ -322,22 +336,45 @@ wait_health() {
 }
 
 # ----------------------------------------------------------------------------
+#  FASE 10b — Banco evolution (Evolution API exige DB proprio no Postgres)
+# ----------------------------------------------------------------------------
+ensure_evolution_db() {
+    info "FASE 10b/16 — Banco evolution"
+    # Espera o Postgres aceitar conexoes (1o boot roda initdb e pode demorar)
+    local i
+    for i in $(seq 1 30); do
+        if docker exec hubleads-postgres pg_isready -U postgres >/dev/null 2>&1; then break; fi
+        sleep 2
+    done
+    if docker exec hubleads-postgres psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='evolution'" | grep -q 1; then
+        ok "Banco evolution ja existe"
+    else
+        docker exec hubleads-postgres psql -U postgres -c "CREATE DATABASE evolution"
+        ok "Banco evolution criado"
+    fi
+    # Garante que a Evolution API suba depois do banco existir (initdb so roda no 1o boot)
+    if docker ps --format '{{.Names}}' | grep -q hubleads-evolution; then
+        docker restart hubleads-evolution >/dev/null 2>&1 || true
+    fi
+}
+
+# ----------------------------------------------------------------------------
 #  FASE 11 — Nginx
 # ----------------------------------------------------------------------------
 setup_nginx() {
-    info "FASE 11/16 — Nginx"
+    info "FASE 11/16 — Nginx (site HTTP temporario)"
     apt-get install -y -qq nginx >/dev/null
-    if [ ! -f "/etc/nginx/nginx.conf" ]; then
-        cp "${SCRIPT_DIR}/nginx/nginx.conf" /etc/nginx/nginx.conf
-    fi
-    if [ ! -f "$NGINX_SITE" ]; then
-        cp "${SCRIPT_DIR}/nginx/sites/hublead.conf" "$NGINX_SITE"
-    fi
+    # nginx.conf com log_format main + security headers + include sites-enabled
+    cp "${SCRIPT_DIR}/nginx/nginx.conf" /etc/nginx/nginx.conf
+    # Site HTTP temporario (sem SSL) — o setup_ssl troca para o HTTPS depois
+    cp "${SCRIPT_DIR}/nginx/sites/hublead-http.conf" "$NGINX_SITE"
+    sed -i "s|__DOMAIN__|${DOMAIN:-hublead.pradodacostasolucoes.com.br}|g" "$NGINX_SITE"
     ln -sf "$NGINX_SITE" "$NGINX_SITE_ENABLED"
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
     nginx -t || { err "nginx -t falhou"; exit 1; }
     systemctl enable nginx >/dev/null 2>&1 || true
     systemctl reload nginx >/dev/null 2>&1 || true
-    ok "Nginx configurado"
+    ok "Nginx configurado (HTTP)"
 }
 
 # ----------------------------------------------------------------------------
@@ -345,24 +382,33 @@ setup_nginx() {
 # ----------------------------------------------------------------------------
 setup_ssl() {
     info "FASE 12/16 — SSL Let's Encrypt"
-    if certbot certificates 2>/dev/null | grep -q "$DOMAIN"; then
+    local DOM="${DOMAIN:-hublead.pradodacostasolucoes.com.br}"
+    if certbot certificates 2>/dev/null | grep -q "$DOM"; then
         ok "Certificado já existe"
-        return
-    fi
-    local ip_actual
-    ip_actual="$(dig +short "$DOMAIN" 2>/dev/null | head -n1 || true)"
-    if [ -z "$ip_actual" ]; then
-        warn "DNS não resolve ainda. Tentando mesmo assim (pode falhar)..."
-    fi
-    if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$SSL_EMAIL" --redirect; then
-        ok "Certificado emitido"
     else
-        warn "Falha na emissão do certificado. Gerando autoassinado temporário?"
-        openssl req -x509 -nodes -newkey rsa:2048 -days 90 \
-            -keyout /etc/letsencrypt/live/"$DOMAIN"/privkey.pem \
-            -out /etc/letsencrypt/live/"$DOMAIN"/fullchain.pem 2>/dev/null \
-            || mkdir -p /etc/letsencrypt/live/"$DOMAIN"
-        warn "Execute certbot manualmente depois: certbot --nginx -d $DOMAIN"
+        local ip_actual
+        ip_actual="$(dig +short "$DOM" 2>/dev/null | head -n1 || true)"
+        if [ -z "$ip_actual" ]; then
+            warn "DNS não resolve ainda. Tentando mesmo assim (pode falhar)..."
+        fi
+        if certbot --nginx -d "$DOM" --non-interactive --agree-tos -m "$SSL_EMAIL" --redirect; then
+            ok "Certificado emitido"
+        else
+            warn "Falha na emissão do certificado (verifique DNS apontando para esta VPS)."
+            warn "Execute depois: certbot --nginx -d $DOM"
+            warn "Continuando com HTTP apenas por enquanto."
+        fi
+    fi
+    # Se o certificado existir, troca o site para a versao HTTPS
+    if [ -f "/etc/letsencrypt/live/${DOM}/fullchain.pem" ]; then
+        cp "${SCRIPT_DIR}/nginx/sites/hublead.conf" "$NGINX_SITE"
+        sed -i "s|__DOMAIN__|${DOM}|g" "$NGINX_SITE"
+        ln -sf "$NGINX_SITE" "$NGINX_SITE_ENABLED"
+        nginx -t || { err "nginx -t falhou (HTTPS)"; exit 1; }
+        systemctl reload nginx >/dev/null 2>&1 || true
+        ok "Site HTTPS ativo"
+    else
+        warn "Certificado ausente — mantendo HTTP. Rode certbot manualmente depois."
     fi
 }
 
@@ -413,6 +459,8 @@ setup_systemd() {
 # ----------------------------------------------------------------------------
 write_summary() {
     info "FASE 16/16 — INSTALL_SUMMARY.md"
+    # Garante DOMAIN disponivel (le do .env)
+    [ -n "${DOMAIN:-}" ] || { set -a; [ -f "$ENV_FILE" ] && source "$ENV_FILE"; set +a; }
     local now
     now="$(date '+%Y-%m-%d %H:%M')"
     cat > "${APP_DIR}/INSTALL_SUMMARY.md" <<EOF
@@ -473,9 +521,10 @@ self_test() {
 #  MAIN
 # =============================================================================
 main() {
-    info "=== HUB LEADS — Instalação iniciada (modo: ${MODE}) ==="
-    [ -d "$APP_DIR" ] || mkdir -p "$APP_DIR"
+    # CRITICO: criar diretorio e log ANTES do primeiro log() (evita 'No such file or directory')
+    mkdir -p "$APP_DIR"
     : > "$LOG_FILE"; touch "$LOG_FILE"; chmod 640 "$LOG_FILE"
+    info "=== HUB LEADS — Instalação iniciada (modo: ${MODE}) ==="
 
     handle_existing
     snapshot_capture
@@ -490,6 +539,7 @@ main() {
             write_env
             deploy_files
             compose_up
+            ensure_evolution_db
             wait_health
             setup_nginx
             setup_ssl

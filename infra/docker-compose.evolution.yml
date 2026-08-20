@@ -10,7 +10,7 @@ services:
     environment:
       SERVER_URL: http://localhost:8080
       DATABASE_ENABLED: "true"
-      DATABASE_PROVIDE: postgresql
+      DATABASE_PROVIDER: postgresql
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localhost:5432/evolution?sslmode=disable
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-minha-chave-aqui}
       AUTHENTICATION_EXPOSE_KEY_FILES: "true"

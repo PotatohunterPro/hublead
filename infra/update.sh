@@ -54,6 +54,11 @@ if [ -d "${PROJECT_ROOT}/pb_hooks" ]; then
     cp -r "${PROJECT_ROOT}/pb_hooks/." "${APP_DIR}/pb_hooks/"
     ok "pb_hooks atualizados"
 fi
+if [ -d "${PROJECT_ROOT}/pg-init" ]; then
+    mkdir -p "${APP_DIR}/pg-init"
+    cp -r "${PROJECT_ROOT}/pg-init/." "${APP_DIR}/pg-init/"
+    ok "pg-init atualizado"
+fi
 
 # 3. Loop de migrations (aplicar upgrades na ordem, idempotente)
 #    Migration = função bash com nome migration_NNN; registradas num arquivo de estado.
@@ -76,6 +81,17 @@ set -a; [ -f .env ] && source .env; set +a
 docker compose pull || warn "pull falhou"
 docker compose up -d --remove-orphans
 ok "Containers recriados"
+
+# 4b. Garante banco evolution (criado pelo initdb no 1o boot; fallback idempotente)
+if docker ps --format '{{.Names}}' | grep -q hubleads-postgres; then
+    for i in $(seq 1 30); do
+        if docker exec hubleads-postgres pg_isready -U postgres >/dev/null 2>&1; then break; fi
+        sleep 2
+    done
+    docker exec hubleads-postgres psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='evolution'" | grep -q 1 \
+        || docker exec hubleads-postgres psql -U postgres -c "CREATE DATABASE evolution"
+    docker restart hubleads-evolution >/dev/null 2>&1 || true
+fi
 
 # 5. Reload nginx
 systemctl reload nginx >/dev/null 2>&1 || true

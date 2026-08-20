@@ -3,10 +3,10 @@
 *.env.local
 infra/.env
 
-# Backups
+# Backups (dumps SQL gerados pelo backup.sh)
 backups/
 *.tar.gz
-*.sql
+backups/**/*.sql
 
 # Logs
 *.log
