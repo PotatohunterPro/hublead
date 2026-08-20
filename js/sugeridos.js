@@ -59,6 +59,7 @@ const SUGERIDOS = {
         App.toast(data.error || 'Erro ao extrair dados', 'error');
       }
     } catch (err) {
+      console.error('Falha ao adicionar URL:', err);
       App.toast('Sem conexão. Salve o link e tente depois.', 'warning');
       await db.leadsMapa.put({
         empresa: 'Aguardando scraping...',
@@ -96,8 +97,8 @@ const SUGERIDOS = {
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${this.corStatus(l.status)}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
         </div>
         <div style="flex:1;min-width:0">
-          <div class="lead-item-title">${l.empresa || 'Aguardando dados...'}</div>
-          <div class="lead-item-subtitle">${l.endereco || l.cidade || l.cnpj || ''}</div>
+          <div class="lead-item-title">${esc(l.empresa) || 'Aguardando dados...'}</div>
+          <div class="lead-item-subtitle">${esc(l.endereco) || esc(l.cidade) || esc(l.cnpj) || ''}</div>
           <div class="lead-item-meta">
             <span class="badge" style="background:${this.corStatus(l.status)}22;color:${this.corStatus(l.status)}">${this.labelStatus(l.status)}</span>
             ${l.syncStatus === 'pending' ? '<span class="badge badge-warning">Pendente de scraping</span>' : ''}

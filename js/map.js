@@ -67,9 +67,9 @@ const MAPA = {
         radius: 8, fillColor: '#34c759', color: '#fff', weight: 2, opacity: 1, fillOpacity: 0.8
       });
       marker.bindPopup(`
-        <strong style="font-size:14px">${l.empresa}</strong><br>
-        <span style="color:#6e6e73">${l.segmento || ''}</span><br>
-        <span style="font-size:12px">${l.nomeContato} — ${l.zapContato}</span><br>
+        <strong style="font-size:14px">${esc(l.empresa)}</strong><br>
+        <span style="color:#6e6e73">${esc(l.segmento)}</span><br>
+        <span style="font-size:12px">${esc(l.nomeContato)} — ${esc(l.zapContato)}</span><br>
         <button onclick="MAPA.navegarAte(${l.latitude}, ${l.longitude})" style="margin-top:6px;padding:6px 14px;border-radius:8px;border:none;background:#0A5DA8;color:#fff;cursor:pointer;font-size:13px;font-weight:600">
           Navegar ate
         </button>
@@ -86,9 +86,9 @@ const MAPA = {
     const btnBase = 'width:100%;padding:8px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;margin-top:4px';
     return `
       <div style="min-width:170px">
-        <strong style="font-size:14px">${empresa || 'Empresa'}</strong><br>
-        <span style="color:#6e6e73;font-size:12px">${endereco || ''}</span>
-        ${cnae ? `<br><span style="color:#6e6e73;font-size:11px">CNAE: ${cnae}</span>` : ''}
+        <strong style="font-size:14px">${esc(empresa) || 'Empresa'}</strong><br>
+        <span style="color:#6e6e73;font-size:12px">${esc(endereco)}</span>
+        ${cnae ? `<br><span style="color:#6e6e73;font-size:11px">CNAE: ${esc(cnae)}</span>` : ''}
         <br>
         <span class="badge" style="display:inline-block;margin-top:6px;padding:2px 10px;border-radius:9999px;font-size:11px;font-weight:600;background:${this.CORES[status] || this.CORES.pendente}22;color:${this.CORES[status] || this.CORES.pendente}">
           ${statusLabel[status] || status}

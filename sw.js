@@ -1,9 +1,10 @@
-const CACHE_NAME = 'hubleads-v1';
+const CACHE_NAME = 'hubleads-v2';
 const ASSETS = [
   '/',
   '/index.html',
   '/css/design-tokens.css',
   '/css/globals.css',
+  '/js/util.js',
   '/js/db.js',
   '/js/api.js',
   '/js/camera.js',

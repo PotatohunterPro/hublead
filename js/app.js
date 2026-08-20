@@ -120,6 +120,7 @@ const App = {
     if (!overlay) return;
     overlay.classList.remove('visible');
     delete overlay.dataset.required;
+    this.pararPollConexao();
   },
 
   salvarConfig() {
@@ -182,21 +183,45 @@ const App = {
     }
   },
 
-  pollConexao() {
+  // Poll da conexão WhatsApp com limite, backoff exponencial e cancelamento
+  pollConexao(tentativa = 0) {
+    const MAX = 8; // máximo de tentativas (≈ 4s+8s+16s+32s... até ~8min total)
     clearTimeout(this._pollQr);
+    if (tentativa >= MAX) {
+      // Parou de tentar (evita polling infinito) — mas deixa o botão Atualizar ativo
+      const txt = document.getElementById('whatsappStatusText');
+      if (txt) txt.textContent = 'Aguardando escaneamento... Toque em "Atualizar QR Code" para tentar de novo.';
+      return;
+    }
+    // Backoff exponencial: 4s, 8s, 16s, 32s... (limitado a 60s)
+    const delay = Math.min(4000 * Math.pow(2, tentativa), 60000);
     this._pollQr = setTimeout(async () => {
-      const estado = await API.estadoConexao();
-      if (estado === 'open') {
-        const dot = document.getElementById('whatsappStatusDot');
-        const txt = document.getElementById('whatsappStatusText');
-        const qr = document.getElementById('qrcodeContainer');
-        if (dot) dot.style.background = '#34c759';
-        if (txt) txt.textContent = 'Conectado ao WhatsApp ✓';
-        if (qr) qr.style.display = 'none';
-      } else if (document.getElementById('configOverlay')?.classList.contains('visible')) {
-        this.pollConexao();
+      // Se o modal foi fechado, para de pollar
+      if (!document.getElementById('configOverlay')?.classList.contains('visible')) {
+        clearTimeout(this._pollQr);
+        return;
       }
-    }, 4000);
+      try {
+        const estado = await API.estadoConexao();
+        if (estado === 'open') {
+          const dot = document.getElementById('whatsappStatusDot');
+          const txt = document.getElementById('whatsappStatusText');
+          const qr = document.getElementById('qrcodeContainer');
+          if (dot) dot.style.background = '#34c759';
+          if (txt) txt.textContent = 'Conectado ao WhatsApp ✓';
+          if (qr) qr.style.display = 'none';
+        } else {
+          this.pollConexao(tentativa + 1);
+        }
+      } catch (e) {
+        console.error('Poll conexão falhou:', e);
+        this.pollConexao(tentativa + 1);
+      }
+    }, delay);
+  },
+
+  pararPollConexao() {
+    clearTimeout(this._pollQr);
   },
 
   initOfflineBar() {
@@ -220,7 +245,7 @@ const App = {
           SUGERIDOS.refresh();
           MAPA.refresh();
         }
-      } catch (e) { /* tenta de novo depois */ }
+      } catch (e) { console.error('Sync de leads do mapa falhou:', e); }
       API.processarFila().then(enviados => {
         if (enviados > 0) {
           this.toast(enviados + ' lead(s) enviados da fila!', 'success');
@@ -232,17 +257,29 @@ const App = {
   },
 
   iniciarPolling() {
-    setInterval(async () => {
-      const fila = await dbGetFila();
-      if (fila.length > 0 && navigator.onLine) {
-        const enviados = await API.processarFila();
-        if (enviados > 0) {
-          this.atualizarBadge();
-          this.atualizarDashboard();
-          this.carregarFila();
+    if (this._pollId) return; // evita múltiplos intervalos em re-init
+    this._pollId = setInterval(async () => {
+      try {
+        const fila = await dbGetFila();
+        if (fila.length > 0 && navigator.onLine) {
+          const enviados = await API.processarFila();
+          if (enviados > 0) {
+            this.atualizarBadge();
+            this.atualizarDashboard();
+            this.carregarFila();
+          }
         }
+      } catch (e) {
+        console.error('Polling da fila falhou:', e);
       }
     }, 30000);
+  },
+
+  pararPolling() {
+    if (this._pollId) {
+      clearInterval(this._pollId);
+      this._pollId = null;
+    }
   },
 
   async atualizarBadge() {
@@ -322,8 +359,8 @@ const App = {
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2z"/></svg>
         </div>
         <div class="lead-item-info">
-          <div class="lead-item-title">${item.leadData?.empresa || 'Lead'}</div>
-          <div class="lead-item-subtitle">${item.leadData?.nomeContato || '-'} — ${item.leadData?.zapContato || '-'}</div>
+          <div class="lead-item-title">${esc(item.leadData?.empresa) || 'Lead'}</div>
+          <div class="lead-item-subtitle">${esc(item.leadData?.nomeContato) || '-'} — ${esc(item.leadData?.zapContato) || '-'}</div>
           <div class="lead-item-meta">
             <span class="badge badge-warning">${item.tentativas}/3 tentativas</span>
             <span style="font-size:11px;color:var(--color-text-tertiary)">${new Date(item.criadoEm).toLocaleString('pt-BR')}</span>
@@ -350,8 +387,8 @@ const App = {
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-success)"><polyline points="20 6 9 17 4 12"/></svg>
         </div>
         <div class="lead-item-info">
-          <div class="lead-item-title">${item.empresa || 'Lead'}</div>
-          <div class="lead-item-subtitle">${item.nomeContato || '-'} — ${item.zapContato || '-'}</div>
+          <div class="lead-item-title">${esc(item.empresa) || 'Lead'}</div>
+          <div class="lead-item-subtitle">${esc(item.nomeContato) || '-'} — ${esc(item.zapContato) || '-'}</div>
           <div class="lead-item-meta">
             <span class="badge badge-success">Enviado</span>
             <span style="font-size:11px;color:var(--color-text-tertiary)">${item.enviadoEm || '-'}</span>
