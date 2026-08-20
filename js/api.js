@@ -153,6 +153,49 @@ const API = {
     return response.json();
   },
 
+  // ---- MODO MANUAL: envia via WhatsApp do celular (sem Evolution) ----
+  // Gera a mensagem, copia para o clipboard e abre o WhatsApp do contato.
+  // O hunter só toca em enviar/encaminhar. Útil enquanto a Evolution está fora.
+  abrirManual(dados) {
+    const msg = this.formatarMensagem(dados);
+    // 1) Copia a mensagem formatada para a área de transferência
+    const copiar = () => {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(msg).catch(() => {});
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = msg;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+      }
+    };
+    copiar();
+    // 2) Abre o WhatsApp no número do contato do lead (se houver), senão só o app
+    const zap = String(dados.zapContato || '').replace(/\D/g, '');
+    if (zap) {
+      window.open('https://wa.me/' + zap + '?text=' + encodeURIComponent(msg), '_blank');
+    } else {
+      window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+    }
+    return msg;
+  },
+
+  // Determina se a Evolution está configurada e alcançável
+  async modoDisponivel() {
+    const cfg = this.getConfig();
+    if (!cfg.grupoId) return 'manual'; // sem grupo configurado -> usa manual
+    try {
+      const estado = await this.estadoConexao();
+      return estado === 'open' ? 'api' : 'manual';
+    } catch (e) {
+      return 'manual';
+    }
+  },
+
   async processarFila() {
     const fila = await dbGetFila();
     if (fila.length === 0) return 0;

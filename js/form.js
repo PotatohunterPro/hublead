@@ -114,19 +114,32 @@ const FORM = {
       const msg = API.formatarMensagem(dados);
       const online = navigator.onLine;
       if (online) {
-        try {
-          if (fotoBlob) {
-            await API.enviarFotoParaAPI(fotoBlob, msg);
-          } else {
-            await API.enviarParaAPI(msg);
+        const cfg = API.getConfig();
+        const modo = cfg.envioManual === 'manual' ? 'manual' : await API.modoDisponivel();
+        if (modo === 'api') {
+          try {
+            if (fotoBlob) {
+              await API.enviarFotoParaAPI(fotoBlob, msg);
+            } else {
+              await API.enviarParaAPI(msg);
+            }
+            await dbSalvarNoHistorico(dados);
+            await dbAtualizarStatusLead(leadId, 'enviado');
+            App.toast('Lead enviado com sucesso!', 'success');
+            API.processarFila();
+          } catch (err) {
+            // Evolution falhou -> usa o modo manual (abre WhatsApp do celular)
+            App.toast('Evolution indisponível — abrindo WhatsApp manual', 'warning');
+            API.abrirManual(dados);
+            await dbSalvarNoHistorico(dados);
+            await dbAtualizarStatusLead(leadId, 'enviado');
           }
+        } else {
+          // Evolution não conectada -> modo manual direto
+          App.toast('Enviando pelo WhatsApp do celular', 'success');
+          API.abrirManual(dados);
           await dbSalvarNoHistorico(dados);
           await dbAtualizarStatusLead(leadId, 'enviado');
-          App.toast('Lead enviado com sucesso!', 'success');
-          API.processarFila();
-        } catch (err) {
-          await dbSalvarNaFila(dados, fotoBlob);
-          App.toast('Sem conexão. Salvo na fila.', 'warning');
         }
       } else {
         await dbSalvarNaFila(dados, fotoBlob);

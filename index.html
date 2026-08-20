@@ -414,9 +414,17 @@
         <input type="password" id="configApiKey" class="form-input" placeholder="Chave da sua instância">
       </div>
       <div class="form-group">
-        <label class="form-label" for="configGrupoId">ID do Grupo WhatsApp</label>
+        <label class="form-label" for="configGrupoId">ID do Grupo WhatsApp (opcional)</label>
         <input type="text" id="configGrupoId" class="form-input" placeholder="5516999999999-1234567890">
-        <div class="form-hint">Formato: código do país + número com @g.us</div>
+        <div class="form-hint">Necessário apenas para envio automático via Evolution. Vazio = envia pelo WhatsApp do celular.</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="configEnvioManual">Modo de envio</label>
+        <select id="configEnvioManual" class="form-select">
+          <option value="auto">Automático (Evolution, se disponível)</option>
+          <option value="manual">Manual (WhatsApp do celular sempre)</option>
+        </select>
+        <div class="form-hint">Use Manual se a Evolution estiver fora do ar.</div>
       </div>
     </div>
     <div style="display:flex;gap:var(--space-3);margin-top:var(--space-5)">

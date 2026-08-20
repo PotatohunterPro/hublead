@@ -97,6 +97,8 @@ const App = {
     document.getElementById('configApiUrl').value = cfg.apiUrl || '';
     document.getElementById('configApiKey').value = cfg.apiKey || '';
     document.getElementById('configGrupoId').value = cfg.grupoId || '';
+    const selEnvio = document.getElementById('configEnvioManual');
+    if (selEnvio) selEnvio.value = cfg.envioManual || 'auto';
     document.getElementById('configHunterNome').value = hunter.nome || '';
     document.getElementById('configHunterCelular').value = hunter.celular || '';
     const title = document.getElementById('configModalTitle');
@@ -134,7 +136,8 @@ const App = {
     const apiUrl = document.getElementById('configApiUrl').value.trim();
     const apiKey = document.getElementById('configApiKey').value.trim();
     const grupoId = document.getElementById('configGrupoId').value.trim();
-    API.setConfig({ apiUrl, apiKey, grupoId });
+    const envioManual = document.getElementById('configEnvioManual')?.value || 'auto';
+    API.setConfig({ apiUrl, apiKey, grupoId, envioManual });
     this.toast('Configuração salva!', 'success');
     this.fecharConfig();
     this.atualizarDashboard();
