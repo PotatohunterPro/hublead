@@ -60,11 +60,20 @@ if [ -d "${PROJECT_ROOT}/pg-init" ]; then
     ok "pg-init atualizado"
 fi
 
+# ---- Funções de migration (definidas ANTES do loop) ----
+# Adicionar novas no formato migration_00X_nome
+migration_001_inicial() {
+    # Migração de exemplo — nada a fazer na primeira execução
+    return 0
+}
+
 # 3. Loop de migrations (aplicar upgrades na ordem, idempotente)
-#    Migration = função bash com nome migration_NNN; registradas num arquivo de estado.
+#    Encontra funções migration_* definidas acima e aplica as ainda não rodadas.
 MIGRATIONS_FILE="${APP_DIR}/.migrations_applied"
-: > /dev/null
-for mig in $(declare -F | awk '{print $3}' | grep '^migration_' | sort -t_ -k2 -n); do
+touch "$MIGRATIONS_FILE"
+# Lista segura: nome exato das funções "migration_*" já definidas
+MIGS=($(compgen -A function | grep '^migration_' | sort))
+for mig in "${MIGS[@]}"; do
     if ! grep -qx "$mig" "$MIGRATIONS_FILE" 2>/dev/null; then
         info "Aplicando $mig..."
         "$mig"
@@ -99,10 +108,3 @@ systemctl reload nginx >/dev/null 2>&1 || true
 # 6. Self-test rápido
 docker compose ps
 ok "Atualização concluída"
-
-# ---- Funções de migration (adicionar novas no formato migration_00X_nome) ----
-
-migration_001_inicial() {
-    # Migração de exemplo — nada a fazer na primeira execução
-    return 0
-}
