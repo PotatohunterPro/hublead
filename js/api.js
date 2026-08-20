@@ -1,6 +1,8 @@
 const API = {
   CONFIG_KEY: 'hubleads_config',
   HUNTER_KEY: 'hubleads_hunter',
+  // Instância criada na Evolution API (configurada no .env / EVOLUTION_INSTANCE_NAME)
+  INSTANCE: 'hub_hunter',
 
   getConfig() {
     return JSON.parse(localStorage.getItem(this.CONFIG_KEY) || '{}');
@@ -31,6 +33,65 @@ const API = {
     return !!(h.nome && h.celular);
   },
 
+  // URL base da Evolution API.
+  // Padrão: mesma origem via proxy Nginx (/evolution) — sem configurar nada.
+  // Permite override manual (avançado) se quiser apontar para outro servidor.
+  baseUrl() {
+    const cfg = this.getConfig();
+    if (cfg.apiUrl) return cfg.apiUrl.replace(/\/+$/, '');
+    return '/evolution';
+  },
+
+  // Garante que a instância exista na Evolution API (idempotente).
+  async garantirInstancia() {
+    const base = this.baseUrl();
+    const cfg = this.getConfig();
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.apiKey) headers['apikey'] = cfg.apiKey;
+    // Tenta conectar (gera QR se desconectada / já existe)
+    try {
+      const resp = await fetch(base + '/instance/connect/' + this.INSTANCE, { headers });
+      if (resp.ok) return resp.json();
+      // 404 -> instância não existe; cria e tenta conectar
+      if (resp.status === 404) {
+        const create = await fetch(base + '/instance/create', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            instanceName: this.INSTANCE,
+            integration: 'WHATSAPP-BAILEYS',
+            qrcode: true
+          })
+        });
+        await create.json();
+        const connect = await fetch(base + '/instance/connect/' + this.INSTANCE, { headers });
+        return connect.json();
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  // Estado da conexão: 'open' | 'connecting' | 'close' | 'qrcode'
+  async estadoConexao() {
+    const base = this.baseUrl();
+    const cfg = this.getConfig();
+    const headers = {};
+    if (cfg.apiKey) headers['apikey'] = cfg.apiKey;
+    try {
+      const resp = await fetch(base + '/instance/connectionState/' + this.INSTANCE, { headers });
+      if (!resp.ok) return 'close';
+      const data = await resp.json();
+      const state = data?.instance?.state || 'close';
+      if (state === 'open') return 'open';
+      if (state === 'close') return 'qrcode';
+      return 'connecting';
+    } catch (e) {
+      return 'close';
+    }
+  },
+
   formatarMensagem(d) {
     let msg = `🏢 *${d.empresa}* — ${d.segmento || '-'}\n`;
     msg += `📍 ${d.cidadeBairro || '-'}\n\n`;
@@ -46,16 +107,15 @@ const API = {
 
   async enviarParaAPI(mensagem) {
     const cfg = this.getConfig();
-    if (!cfg.apiUrl || !cfg.apiKey || !cfg.grupoId) {
-      throw new Error('API não configurada');
+    if (!cfg.grupoId) {
+      throw new Error('ID do grupo não configurado');
     }
-    const baseUrl = cfg.apiUrl.replace(/\/+$/, '');
-    const response = await fetch(`${baseUrl}/message/sendText/${cfg.grupoId}`, {
+    const base = this.baseUrl();
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.apiKey) headers['apikey'] = cfg.apiKey;
+    const response = await fetch(base + '/message/sendText/' + this.INSTANCE, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': cfg.apiKey
-      },
+      headers,
       body: JSON.stringify({
         number: cfg.grupoId,
         text: mensagem,
@@ -71,17 +131,19 @@ const API = {
 
   async enviarFotoParaAPI(fotoBlob, legenda) {
     const cfg = this.getConfig();
-    if (!cfg.apiUrl || !cfg.apiKey || !cfg.grupoId) {
-      throw new Error('API não configurada');
+    if (!cfg.grupoId) {
+      throw new Error('ID do grupo não configurado');
     }
-    const baseUrl = cfg.apiUrl.replace(/\/+$/, '');
+    const base = this.baseUrl();
+    const headers = {};
+    if (cfg.apiKey) headers['apikey'] = cfg.apiKey;
     const formData = new FormData();
     formData.append('file', fotoBlob, 'fachada.jpg');
     formData.append('number', cfg.grupoId);
     formData.append('caption', legenda);
-    const response = await fetch(`${baseUrl}/message/sendMedia/${cfg.grupoId}`, {
+    const response = await fetch(base + '/message/sendMedia/' + this.INSTANCE, {
       method: 'POST',
-      headers: { 'apikey': cfg.apiKey },
+      headers,
       body: formData
     });
     if (!response.ok) {

@@ -25,6 +25,10 @@
   .filtro-row::-webkit-scrollbar { height: 2px; }
   .filtro-btn { white-space: nowrap; padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); border: 1px solid var(--color-separator); background: transparent; color: var(--color-text-secondary); font-size: var(--text-caption2); cursor: pointer; font-family: var(--font-family); transition: all var(--duration-fast) var(--ease-standard); }
   .filtro-btn.active { background: var(--color-accent-subtle); color: var(--color-accent); border-color: var(--color-accent); }
+  .whatsapp-status { transition: all var(--duration-fast) var(--ease-standard); }
+  .whatsapp-status[data-state='open'] { border-color: rgba(52,199,89,0.4); }
+  #qrcodeContainer img { transition: transform var(--duration-fast) var(--ease-standard); }
+  #qrcodeContainer img:active { transform: scale(0.96); }
 </style>
 </head>
 <body>
@@ -383,15 +387,27 @@
       <input type="tel" id="configHunterCelular" class="form-input" placeholder="(16) 99999-9999" required autocomplete="tel">
       <div class="form-hint">Usado para identificar você no grupo</div>
     </div>
+    <div class="form-group" id="whatsappStatusGroup">
+      <label class="form-label">WhatsApp (Evolution API)</label>
+      <div id="whatsappStatus" class="whatsapp-status" style="display:flex;align-items:center;gap:var(--space-2);padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-surface-secondary);border:1px solid var(--color-separator)">
+        <span id="whatsappStatusDot" style="width:10px;height:10px;border-radius:50%;background:var(--color-warning);flex-shrink:0"></span>
+        <span id="whatsappStatusText" style="font-size:var(--text-footnote);color:var(--color-text-secondary)">Verificando conexão...</span>
+      </div>
+      <div id="qrcodeContainer" style="display:none;text-align:center;margin-top:var(--space-3)">
+        <img id="qrcodeImg" alt="QR Code WhatsApp" style="width:200px;height:200px;border-radius:var(--radius-md);background:#fff;padding:var(--space-2)">
+        <p style="font-size:var(--text-caption2);color:var(--color-text-tertiary);margin-top:var(--space-2)">Abra o WhatsApp &gt; Aparelhos conectados &gt; Conectar aparelho e escaneie</p>
+        <button type="button" id="btnRefreshQr" class="btn btn-ghost" style="margin-top:var(--space-2)">Atualizar QR Code</button>
+      </div>
+    </div>
     <button id="btnToggleAvancadas" type="button" class="btn btn-ghost btn-block" style="justify-content:flex-start;padding:var(--space-2) var(--space-3)">
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
       Configurações avançadas
     </button>
     <div id="configAvancadas" style="display:none;margin-top:var(--space-3)">
       <div class="form-group">
-        <label class="form-label" for="configApiUrl">URL da Evolution API</label>
-        <input type="url" id="configApiUrl" class="form-input" placeholder="http://SEU_SERVIDOR:8080">
-        <div class="form-hint">Ex: http://192.168.0.100:8080</div>
+        <label class="form-label" for="configApiUrl">URL da Evolution API (opcional)</label>
+        <input type="url" id="configApiUrl" class="form-input" placeholder="/evolution">
+        <div class="form-hint">Deixe vazio para usar o proxy automático (/evolution). Só preencha se a API estiver em outro servidor.</div>
       </div>
       <div class="form-group">
         <label class="form-label" for="configApiKey">API Key</label>

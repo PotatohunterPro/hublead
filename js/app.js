@@ -70,6 +70,8 @@ const App = {
     if (btnConfig) btnConfig.addEventListener('click', () => this.abrirConfig());
     if (btnSalvar) btnSalvar.addEventListener('click', () => this.salvarConfig());
     if (closeBtn) closeBtn.addEventListener('click', () => this.fecharConfig());
+    const btnQr = document.getElementById('btnRefreshQr');
+    if (btnQr) btnQr.addEventListener('click', () => this.carregarQrCode());
     if (overlay) overlay.addEventListener('click', (e) => {
       if (e.target === overlay && !overlay.dataset.required) this.fecharConfig();
     });
@@ -109,6 +111,8 @@ const App = {
 
     overlay.classList.add('visible');
     if (required) overlay.dataset.required = 'true';
+    // Checa status do WhatsApp e mostra QR se precisar
+    this.verificarWhatsApp();
   },
 
   fecharConfig() {
@@ -133,6 +137,66 @@ const App = {
     this.toast('Configuração salva!', 'success');
     this.fecharConfig();
     this.atualizarDashboard();
+  },
+
+  async verificarWhatsApp() {
+    const dot = document.getElementById('whatsappStatusDot');
+    const txt = document.getElementById('whatsappStatusText');
+    const qr = document.getElementById('qrcodeContainer');
+    if (!dot || !txt) return;
+    dot.style.background = 'var(--color-warning)';
+    txt.textContent = 'Verificando conexão...';
+    qr.style.display = 'none';
+    const estado = await API.estadoConexao();
+    if (estado === 'open') {
+      dot.style.background = '#34c759';
+      txt.textContent = 'Conectado ao WhatsApp ✓';
+      qr.style.display = 'none';
+    } else {
+      dot.style.background = 'var(--color-warning)';
+      txt.textContent = 'Conecte o WhatsApp (escaneie o QR abaixo)';
+      qr.style.display = 'block';
+      this.carregarQrCode();
+    }
+  },
+
+  async carregarQrCode() {
+    const img = document.getElementById('qrcodeImg');
+    const qr = document.getElementById('qrcodeContainer');
+    const dot = document.getElementById('whatsappStatusDot');
+    const txt = document.getElementById('whatsappStatusText');
+    if (!img) return;
+    const dados = await API.garantirInstancia();
+    const base64 = dados?.qrcode?.base64 || dados?.base64 || null;
+    if (base64) {
+      img.src = 'data:image/png;base64,' + base64;
+      qr.style.display = 'block';
+      dot.style.background = 'var(--color-warning)';
+      txt.textContent = 'Escaneie o QR Code para conectar';
+      // Poll até conectar
+      this.pollConexao();
+    } else {
+      qr.style.display = 'block';
+      img.style.display = 'none';
+      txt.textContent = 'Não foi possível obter o QR Code. Verifique se a Evolution API está no ar em /evolution.';
+    }
+  },
+
+  pollConexao() {
+    clearTimeout(this._pollQr);
+    this._pollQr = setTimeout(async () => {
+      const estado = await API.estadoConexao();
+      if (estado === 'open') {
+        const dot = document.getElementById('whatsappStatusDot');
+        const txt = document.getElementById('whatsappStatusText');
+        const qr = document.getElementById('qrcodeContainer');
+        if (dot) dot.style.background = '#34c759';
+        if (txt) txt.textContent = 'Conectado ao WhatsApp ✓';
+        if (qr) qr.style.display = 'none';
+      } else if (document.getElementById('configOverlay')?.classList.contains('visible')) {
+        this.pollConexao();
+      }
+    }, 4000);
   },
 
   initOfflineBar() {
