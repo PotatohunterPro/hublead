@@ -437,7 +437,10 @@ setup_cron() {
         chown "$APP_USER":"$APP_USER" "$APP_DIR/backup.sh"
     fi
     local cron_line="0 3 * * * ${APP_DIR}/backup.sh >> ${LOG_FILE} 2>&1"
-    ( crontab -l 2>/dev/null | grep -v "${APP_DIR}/backup.sh"; echo "$cron_line" ) | crontab -
+    # Gera o novo crontab preservando entradas existentes (pipefail-safe)
+    local novo
+    novo="$( { crontab -l 2>/dev/null || true; } | grep -v "${APP_DIR}/backup.sh" || true )"
+    printf '%s\n%s\n' "$novo" "$cron_line" | crontab -
     ok "Cron instalado"
 }
 
