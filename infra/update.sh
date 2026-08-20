@@ -7,6 +7,8 @@ set -Eeuo pipefail
 
 APP_DIR="/opt/hubleads"
 LOG_FILE="${APP_DIR}/install.log"
+NGINX_SITE="/etc/nginx/sites-available/hublead.conf"
+NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/hublead.conf"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_DIR="${APP_DIR}/backups"
 
@@ -58,6 +60,22 @@ if [ -d "${PROJECT_ROOT}/pg-init" ]; then
     mkdir -p "${APP_DIR}/pg-init"
     cp -r "${PROJECT_ROOT}/pg-init/." "${APP_DIR}/pg-init/"
     ok "pg-init atualizado"
+fi
+# Nginx: copia nginx.conf e o site (para pegar mudancas de proxy/config)
+if [ -f "${PROJECT_ROOT}/nginx/nginx.conf" ]; then
+    cp "${PROJECT_ROOT}/nginx/nginx.conf" /etc/nginx/nginx.conf
+    ok "nginx.conf atualizado"
+fi
+if [ -f "${PROJECT_ROOT}/nginx/sites/hublead-http.conf" ]; then
+    cp "${PROJECT_ROOT}/nginx/sites/hublead-http.conf" "${APP_DIR}/hublead-http.conf"
+    ok "hublead-http.conf atualizado"
+fi
+if [ -f "${PROJECT_ROOT}/nginx/sites/hublead.conf" ]; then
+    cp "${PROJECT_ROOT}/nginx/sites/hublead.conf" "$NGINX_SITE"
+    sed -i "s|__DOMAIN__|$(grep DOMAIN "${APP_DIR}/.env" 2>/dev/null | cut -d= -f2 || echo "hublead.pradodacostasolucoes.com.br")|g" "$NGINX_SITE"
+    ln -sf "$NGINX_SITE" "$NGINX_SITE_ENABLED"
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    ok "hublead.conf (site) atualizado"
 fi
 
 # ---- Funções de migration (definidas ANTES do loop) ----
