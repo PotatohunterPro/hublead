@@ -229,7 +229,7 @@ routerAdd('POST', '/api/scrape/url', async (c) => {
     $app.logger().error('Falha ao adicionar lead', { error: error.message, input });
     return c.json(500, { error: 'Falha ao processar lead: ' + error.message });
   }
-}, $apis.activityLogger($app));
+});
 
 // ============================================================
 //  POST /api/scrape/batch (Adiciona múltiplos CNPJs em lote)

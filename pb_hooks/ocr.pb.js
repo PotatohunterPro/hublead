@@ -156,4 +156,4 @@ routerAdd('POST', '/api/extract-card', async (c) => {
   }
 
   return c.json(200, { success: true, data: normalizarDadosCartao(obj) });
-}, $apis.activityLogger($app));
+});
