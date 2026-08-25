@@ -99,14 +99,17 @@ const API = {
     linhas.push(titulo);
     if (d.cidadeBairro) linhas.push(`📍 ${d.cidadeBairro}`);
     linhas.push('');
-    // Sistema atual (só se preenchido)
+    // Sistema atual
     const sist = [];
     if (d.qualSistema) sist.push(`*${d.qualSistema}*`);
     if (d.mensalidade) sist.push(`R$ ${d.mensalidade}`);
     if (sist.length) linhas.push(`💻 Sistema: ${sist.join(' · ')}`);
+    else linhas.push('💻 Sistema: Não informado');
     if (d.temSistema === 'Não') linhas.push('💻 Sem sistema atualmente');
     if (d.suporteBom) linhas.push(`🔧 Suporte: ${d.suporteBom}`);
-    if (d.faltas) linhas.push(`💬 Dor: ${d.faltas}`);
+    else linhas.push('🔧 Suporte: Não informado');
+    if (d.faltas) linhas.push(`💬 *Dor*: ${d.faltas}`);
+    else linhas.push('💬 *Dor*: Não respondeu');
     linhas.push('');
     // Contato
     const contato = [];
@@ -129,10 +132,21 @@ const API = {
     return linhas.join('\n').trim();
   },
 
+  // Número de destino do envio: SEMPRE prioriza o número cadastrado
+  // (config "WhatsApp de envio" → celular do Hunter). O contato do lead é
+  // só o último recurso, para não abrir o WhatsApp sem destinatário.
+  numeroDestino(dados) {
+    const fixo = String(this.getConfig().numeroEnvio || '').replace(/\D/g, '');
+    const hunter = String(this.getHunterCelular() || '').replace(/\D/g, '');
+    const lead = String((dados && dados.zapContato) || '').replace(/\D/g, '');
+    return fixo || hunter || lead;
+  },
+
   async enviarParaAPI(mensagem) {
     const cfg = this.getConfig();
-    if (!cfg.grupoId) {
-      throw new Error('ID do grupo não configurado');
+    const destino = cfg.grupoId || this.numeroDestino();
+    if (!destino) {
+      throw new Error('Nenhum número de destino configurado');
     }
     const base = this.baseUrl();
     const headers = { 'Content-Type': 'application/json' };
@@ -141,7 +155,7 @@ const API = {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        number: cfg.grupoId,
+        number: destino,
         text: mensagem,
         linkPreview: false
       })
@@ -155,15 +169,16 @@ const API = {
 
   async enviarFotoParaAPI(fotoBlob, legenda) {
     const cfg = this.getConfig();
-    if (!cfg.grupoId) {
-      throw new Error('ID do grupo não configurado');
+    const destino = cfg.grupoId || this.numeroDestino();
+    if (!destino) {
+      throw new Error('Nenhum número de destino configurado');
     }
     const base = this.baseUrl();
     const headers = {};
     if (cfg.apiKey) headers['apikey'] = cfg.apiKey;
     const formData = new FormData();
     formData.append('file', fotoBlob, 'fachada.jpg');
-    formData.append('number', cfg.grupoId);
+    formData.append('number', destino);
     formData.append('caption', legenda);
     const response = await fetch(base + '/message/sendMedia/' + this.INSTANCE, {
       method: 'POST',
@@ -179,10 +194,9 @@ const API = {
 
   // ---- MODO MANUAL: envia via WhatsApp do celular (sem Evolution) ----
   // Gera a mensagem, copia para o clipboard e abre o WhatsApp.
-  // Destinatário: número fixo de envio (se configurado), senão o contato do lead.
+  // Destinatário: sempre o número cadastrado (numeroEnvio → celular do Hunter).
   abrirManual(dados) {
     const msg = this.formatarMensagem(dados);
-    const cfg = this.getConfig();
     // 1) Copia a mensagem formatada para a área de transferência
     const copiar = () => {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -199,19 +213,16 @@ const API = {
       }
     };
     copiar();
-    // 2) Escolhe o destinatário: número fixo de envio tem prioridade
-    const numeroFixo = String(cfg.numeroEnvio || '').replace(/\D/g, '');
-    const numeroLead = String(dados.zapContato || '').replace(/\D/g, '');
-    const destino = numeroFixo || numeroLead;
+    // 2) Destinatário: sempre o número cadastrado (nunca o contato do lead)
+    const destino = this.numeroDestino(dados);
     const waUrl = destino ? 'https://wa.me/' + destino : 'https://wa.me/';
     window.open(waUrl + '?text=' + encodeURIComponent(msg), '_blank');
     return msg;
   },
 
   // Determina se a Evolution está configurada e alcançável
+  // (o destino cai no número cadastrado quando não há grupo configurado)
   async modoDisponivel() {
-    const cfg = this.getConfig();
-    if (!cfg.grupoId) return 'manual'; // sem grupo configurado -> usa manual
     try {
       const estado = await this.estadoConexao();
       return estado === 'open' ? 'api' : 'manual';
