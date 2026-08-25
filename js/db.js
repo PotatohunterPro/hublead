@@ -1,3 +1,8 @@
+// ============================================================
+//  HUB LEADS — IndexedDB (Dexie.js) + Sincronização
+//  Tabela única unificada de Leads (Campo + Curadoria do Gestor)
+// ============================================================
+
 const db = new Dexie('HubLeadsDB');
 
 // Versões declaradas em ordem crescente (upgrade path do Dexie)
@@ -16,45 +21,91 @@ db.version(3).stores({
   leadsMapa: '++id, pbId, cnpj, empresa, status, fonte, dataAdicionado'
 });
 
-db.leads.mapToClass({
-  constructor() {
-    this.empresa = '';
-    this.segmento = '';
-    this.cnpj = '';
-    this.telefoneLoja = '';
-    this.email = '';
-    this.temSistema = '';
-    this.qualSistema = '';
-    this.mensalidade = '';
-    this.temSuporte = '';
-    this.suporteBom = '';
-    this.usoSistema = '';
-    this.trocaAtendimento = '';
-    this.trocaValor = '';
-    this.faltas = '';
-    this.nomeContato = '';
-    this.cargo = '';
-    this.zapContato = '';
-    this.demo = '';
-    this.dataCadastro = '';
-    this.hunter = '';
-    this.status = 'pendente';
-    this.latitude = null;
-    this.longitude = null;
-    this.criadoEm = new Date().toISOString();
+// Versão 4: Tabela Única de Leads
+db.version(4).stores({
+  leads: '++id, pbId, cnpj, empresa, segmento, nomeContato, zapContato, status, fonte, lat, lng, criadoEm, dataCadastro, syncStatus',
+  fila: '++id, criadoEm, tentativas, ultimaTentativa',
+  fotos: '++id, leadId, blob',
+  historico: '++id, empresa, segmento, nomeContato, enviadoEm, hunter',
+  leadsMapa: null // Remove tabela duplicada
+}).upgrade(async (trans) => {
+  try {
+    const mapaLeads = await trans.table('leadsMapa').toArray();
+    if (mapaLeads && mapaLeads.length > 0) {
+      for (const ml of mapaLeads) {
+        await trans.table('leads').put({
+          pbId: ml.pbId || '',
+          cnpj: ml.cnpj || '',
+          empresa: ml.empresa || '',
+          endereco: ml.endereco || '',
+          cnae: ml.cnae || '',
+          telefone: ml.telefone || '',
+          cidade: ml.cidade || '',
+          lat: ml.lat || null,
+          lng: ml.lng || null,
+          status: ml.status || 'pendente',
+          fonte: ml.fonte || 'casa_dados',
+          urlOriginal: ml.urlOriginal || '',
+          criadoEm: ml.dataAdicionado || new Date().toISOString(),
+          dataCadastro: ml.dataAdicionado ? new Date(ml.dataAdicionado).toLocaleString('pt-BR') : '',
+          syncStatus: 'synced'
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('Migração v4 Dexie finalizada:', e);
   }
 });
 
+// Helper de normalização de coordenadas
+function normalizarCoords(lead) {
+  if (!lead) return lead;
+  if (lead.lat === undefined && lead.latitude !== undefined) lead.lat = lead.latitude;
+  if (lead.lng === undefined && lead.longitude !== undefined) lead.lng = lead.longitude;
+  if (lead.latitude === undefined && lead.lat !== undefined) lead.latitude = lead.lat;
+  if (lead.longitude === undefined && lead.lng !== undefined) lead.longitude = lead.lng;
+  return lead;
+}
+
+// ----- Salvar Lead -----
 async function dbSalvarLead(leadData, fotoBlob) {
-  leadData.criadoEm = new Date().toISOString();
-  leadData.dataCadastro = new Date().toLocaleString('pt-BR');
-  const id = await db.leads.add(leadData);
+  leadData.criadoEm = leadData.criadoEm || new Date().toISOString();
+  leadData.dataCadastro = leadData.dataCadastro || new Date().toLocaleString('pt-BR');
+  leadData.status = leadData.status || 'pendente';
+  leadData.syncStatus = leadData.syncStatus || 'pending';
+  normalizarCoords(leadData);
+
+  let id;
+  if (leadData.id) {
+    await db.leads.put(leadData);
+    id = leadData.id;
+  } else if (leadData.cnpj) {
+    const limpo = String(leadData.cnpj).replace(/\D/g, '');
+    const existente = await db.leads.where('cnpj').equals(limpo).first();
+    if (existente) {
+      Object.assign(existente, leadData);
+      await db.leads.put(existente);
+      id = existente.id;
+    } else {
+      id = await db.leads.add(leadData);
+    }
+  } else {
+    id = await db.leads.add(leadData);
+  }
+
   if (fotoBlob) {
     await db.fotos.add({ leadId: id, blob: fotoBlob });
   }
+
+  // Se online e tem backend PocketBase, envia atualização
+  if (navigator.onLine) {
+    dbFlushLeadsPendentes().catch(() => {});
+  }
+
   return id;
 }
 
+// ----- Salvar na Fila Offline -----
 async function dbSalvarNaFila(leadData, fotoBlob) {
   const id = await db.fila.add({
     leadData,
@@ -66,13 +117,40 @@ async function dbSalvarNaFila(leadData, fotoBlob) {
   return id;
 }
 
+// ----- Consultar Leads -----
 async function dbGetLeads(filtro = {}) {
   let collection = db.leads.orderBy('criadoEm').reverse();
   if (filtro.status) collection = collection.filter(l => l.status === filtro.status);
   if (filtro.segmento) collection = collection.filter(l => l.segmento === filtro.segmento);
-  return collection.toArray();
+  if (filtro.fonte) collection = collection.filter(l => l.fonte === filtro.fonte);
+  const leads = await collection.toArray();
+  return leads.map(normalizarCoords);
 }
 
+async function dbGetLeadPorId(id) {
+  const lead = await db.leads.get(Number(id));
+  return normalizarCoords(lead);
+}
+
+async function dbGetLeadPorCnpj(cnpj) {
+  if (!cnpj) return null;
+  const limpo = String(cnpj).replace(/\D/g, '');
+  const lead = await db.leads.where('cnpj').equals(limpo).first();
+  return normalizarCoords(lead);
+}
+
+async function dbGetLeadsComCoordenadas() {
+  const todos = await db.leads.toArray();
+  return todos.map(normalizarCoords).filter(l => l.lat && l.lng);
+}
+
+// Alias para compatibilidade com código existente
+const dbGetLeadsMapa = dbGetLeads;
+const dbGetLeadsMapaComCoords = dbGetLeadsComCoordenadas;
+const dbGetLeadMapaPorCnpj = dbGetLeadPorCnpj;
+const dbSalvarLeadMapa = dbSalvarLead;
+
+// ----- Métricas e Dashboard -----
 async function dbGetLeadsDoDia() {
   const hoje = new Date().toLocaleDateString('pt-BR');
   const todos = await db.leads.toArray();
@@ -90,13 +168,17 @@ async function dbGetLeadsPorDia(dias = 7) {
     agrupado[chave] = 0;
   }
   todos.forEach(l => {
-    if (l.dataCadastro && agrupado[l.dataCadastro] !== undefined) {
-      agrupado[l.dataCadastro]++;
+    if (l.dataCadastro) {
+      const dataStr = l.dataCadastro.split(' ')[0];
+      if (agrupado[dataStr] !== undefined) {
+        agrupado[dataStr]++;
+      }
     }
   });
   return agrupado;
 }
 
+// ----- Fila e Histórico -----
 async function dbGetFila() {
   return db.fila.toArray();
 }
@@ -129,98 +211,13 @@ async function dbSalvarNoHistorico(leadData) {
     nomeContato: leadData.nomeContato,
     zapContato: leadData.zapContato,
     enviadoEm: new Date().toLocaleString('pt-BR'),
-    hunter: leadData.hunter || 'Hunter'
+    hunter: leadData.hunter || API.getHunterNome()
   });
 }
 
-async function dbAtualizarStatusLead(id, status) {
-  return db.leads.update(id, { status });
-}
-
-async function dbGetLeadsComCoordenadas() {
-  return db.leads.filter(l => l.latitude && l.longitude).toArray();
-}
-
-function blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
-
-// ----- leadsMapa (cache local de leads do mapa) -----
-async function dbSalvarLeadMapa(lead) {
-  lead.syncStatus = 'synced';
-  return db.leadsMapa.put(lead);
-}
-
-async function dbGetLeadsMapa(filtroStatus) {
-  let col = db.leadsMapa.orderBy('dataAdicionado').reverse();
-  if (filtroStatus) col = col.filter(l => l.status === filtroStatus);
-  return col.toArray();
-}
-
-async function dbGetLeadsMapaComCoords() {
-  const todos = await db.leadsMapa.toArray();
-  return todos.filter(l => l.lat && l.lng);
-}
-
-const dbGetLeadMapaPorCnpj = async (cnpj) => db.leadsMapa.where('cnpj').equals(cnpj).first();
-
-async function dbSyncLeadsMapa() {
-  try {
-    const resp = await fetch('/api/scrape/leads?limit=500');
-    if (!resp.ok) return 0;
-    const leads = await resp.json();
-    for (const pbLead of leads) {
-      const existente = await db.leadsMapa.where('pbId').equals(pbLead.id).first();
-      if (existente) {
-        // Se há mudança local pendente (PATCH falhou), preserva o status local
-        const patch = existente.syncStatus === 'pending'
-          ? {}
-          : { status: pbLead.status || 'pendente' };
-        await db.leadsMapa.update(existente.id, {
-          ...patch,
-          empresa: pbLead.empresa || '',
-          endereco: pbLead.endereco || '',
-          cnae: pbLead.cnae || '',
-          telefone: pbLead.telefone || '',
-          cidade: pbLead.cidade || '',
-          lat: pbLead.coords?.lat || null,
-          lng: pbLead.coords?.lng || null,
-          hunterId: pbLead.hunterId || '',
-          syncStatus: existente.syncStatus || 'synced'
-        });
-      } else {
-        await db.leadsMapa.add({
-          pbId: pbLead.id,
-          cnpj: pbLead.cnpj || '',
-          empresa: pbLead.empresa || '',
-          endereco: pbLead.endereco || '',
-          cnae: pbLead.cnae || '',
-          telefone: pbLead.telefone || '',
-          cidade: pbLead.cidade || '',
-          lat: pbLead.coords?.lat || null,
-          lng: pbLead.coords?.lng || null,
-          status: pbLead.status || 'pendente',
-          hunterId: pbLead.hunterId || '',
-          fonte: pbLead.fonte || 'casa_dados',
-          urlOriginal: pbLead.urlOriginal || '',
-          dataAdicionado: pbLead.dataAdicionado || new Date().toISOString(),
-          syncStatus: 'synced'
-        });
-      }
-    }
-    return leads.length;
-  } catch (e) {
-    return 0;
-  }
-}
-// ----- status de leads do mapa (local + PocketBase) -----
-async function dbAtualizarStatusLeadMapa(id, status, extra = {}) {
-  const lead = await db.leadsMapa.get(id);
+// ----- Atualização de Status -----
+async function dbAtualizarStatusLead(id, status, extra = {}) {
+  const lead = await db.leads.get(Number(id));
   if (!lead) return null;
   lead.status = status;
   lead.syncStatus = 'synced';
@@ -229,7 +226,10 @@ async function dbAtualizarStatusLeadMapa(id, status, extra = {}) {
   if (extra.lat !== undefined) lead.lat = extra.lat;
   if (extra.lng !== undefined) lead.lng = extra.lng;
   if (extra.dataVisita) lead.dataVisita = extra.dataVisita;
-  await db.leadsMapa.put(lead);
+  if (extra.nomeContato) lead.nomeContato = extra.nomeContato;
+  if (extra.zapContato) lead.zapContato = extra.zapContato;
+  normalizarCoords(lead);
+  await db.leads.put(lead);
 
   // Envia PATCH ao PocketBase se tiver pbId e estiver online
   if (lead.pbId && navigator.onLine) {
@@ -241,63 +241,133 @@ async function dbAtualizarStatusLeadMapa(id, status, extra = {}) {
       });
     } catch (e) {
       lead.syncStatus = 'pending';
-      await db.leadsMapa.put(lead);
+      await db.leads.put(lead);
     }
   }
   return lead;
 }
 
-// Envia leads do mapa salvos offline (sem pbId) para o PocketBase
-// e reenvia mudanças de status locais pendentes (PATCH que falhou)
-async function dbFlushLeadsMapaPendentes() {
-  if (!navigator.onLine) return 0;
-  let enviados = 0;
+const dbAtualizarStatusLeadMapa = dbAtualizarStatusLead;
 
-  // 1) Leads locais sem pbId → criar no servidor via /api/scrape/url
-  const semServidor = await db.leadsMapa.filter(l => !l.pbId).toArray();
+// ----- Sincronização com o PocketBase -----
+async function dbSyncLeads() {
+  try {
+    const resp = await fetch('/api/scrape/leads?limit=500');
+    if (!resp.ok) return 0;
+    const leads = await resp.json();
+    for (const pbLead of leads) {
+      const existente = await db.leads.where('pbId').equals(pbLead.id).first() ||
+                        (pbLead.cnpj ? await db.leads.where('cnpj').equals(pbLead.cnpj).first() : null);
+
+      if (existente) {
+        const patch = existente.syncStatus === 'pending'
+          ? {}
+          : { status: pbLead.status || 'pendente' };
+
+        await db.leads.update(existente.id, {
+          ...patch,
+          pbId: pbLead.id,
+          empresa: pbLead.empresa || existente.empresa || '',
+          endereco: pbLead.endereco || existente.endereco || '',
+          cnae: pbLead.cnae || existente.cnae || '',
+          telefone: pbLead.telefone || existente.telefone || '',
+          cidade: pbLead.cidade || existente.cidade || '',
+          lat: pbLead.coords?.lat || existente.lat || null,
+          lng: pbLead.coords?.lng || existente.lng || null,
+          hunterId: pbLead.hunterId || existente.hunterId || '',
+          syncStatus: existente.syncStatus || 'synced'
+        });
+      } else {
+        await db.leads.add({
+          pbId: pbLead.id,
+          cnpj: pbLead.cnpj || '',
+          empresa: pbLead.empresa || '',
+          endereco: pbLead.endereco || '',
+          cnae: pbLead.cnae || '',
+          telefone: pbLead.telefone || '',
+          cidade: pbLead.cidade || '',
+          lat: pbLead.coords?.lat || null,
+          lng: pbLead.coords?.lng || null,
+          status: pbLead.status || 'pendente',
+          hunterId: pbLead.hunterId || '',
+          fonte: pbLead.fonte || 'brasil_api',
+          urlOriginal: pbLead.urlOriginal || '',
+          criadoEm: pbLead.dataAdicionado || new Date().toISOString(),
+          dataCadastro: pbLead.dataAdicionado ? new Date(pbLead.dataAdicionado).toLocaleString('pt-BR') : '',
+          syncStatus: 'synced'
+        });
+      }
+    }
+    return leads.length;
+  } catch (e) {
+    return 0;
+  }
+}
+
+const dbSyncLeadsMapa = dbSyncLeads;
+
+// Envia leads locais offline para o servidor PocketBase
+async function dbFlushLeadsPendentes() {
+  if (!navigator.onLine) return 0;
+  let sincronizados = 0;
+
+  // 1) Leads sem pbId que possuem CNPJ ou urlOriginal
+  const semServidor = await db.leads.filter(l => !l.pbId && (l.cnpj || l.urlOriginal)).toArray();
   for (const l of semServidor) {
-    if (!l.urlOriginal) continue;
     try {
       const resp = await fetch('/api/scrape/url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: l.urlOriginal })
+        body: JSON.stringify({ cnpj: l.cnpj, url: l.urlOriginal, hunterId: l.hunterId })
       });
       const data = await resp.json();
-      if (data.success) {
-        await db.leadsMapa.update(l.id, {
+      if (data.success && data.lead) {
+        await db.leads.update(l.id, {
           pbId: data.lead.id,
           cnpj: data.lead.cnpj || l.cnpj || '',
           empresa: data.lead.empresa || l.empresa || '',
           endereco: data.lead.endereco || l.endereco || '',
-          cnae: data.lead.cnae || '',
-          telefone: data.lead.telefone || '',
-          cidade: data.lead.cidade || '',
           lat: data.lead.coords?.lat || l.lat || null,
           lng: data.lead.coords?.lng || l.lng || null,
-          status: data.lead.status || 'pendente',
           syncStatus: 'synced'
         });
-        enviados++;
+        sincronizados++;
       }
-    } catch (e) { /* mantém pendente */ }
+    } catch (e) {}
   }
 
-  // 2) Leads com pbId mas syncStatus pending → reenvia o status local
-  const comPendencia = await db.leadsMapa.filter(l => l.pbId && l.syncStatus === 'pending').toArray();
+  // 2) Leads com pbId mas com syncStatus pending (PATCH que falhou)
+  const comPendencia = await db.leads.filter(l => l.pbId && l.syncStatus === 'pending').toArray();
   for (const l of comPendencia) {
     try {
       const resp = await fetch('/api/scrape/leads/' + l.pbId, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: l.status })
+        body: JSON.stringify({
+          status: l.status,
+          empresa: l.empresa,
+          telefone: l.telefone || l.telefoneLoja,
+          nomeContato: l.nomeContato,
+          zapContato: l.zapContato
+        })
       });
       if (resp.ok) {
-        await db.leadsMapa.update(l.id, { syncStatus: 'synced' });
-        enviados++;
+        await db.leads.update(l.id, { syncStatus: 'synced' });
+        sincronizados++;
       }
-    } catch (e) { /* mantém pendente */ }
+    } catch (e) {}
   }
 
-  return enviados;
+  return sincronizados;
+}
+
+const dbFlushLeadsMapaPendentes = dbFlushLeadsPendentes;
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }

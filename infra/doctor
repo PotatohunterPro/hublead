@@ -36,7 +36,7 @@ echo "── Docker"
 check "Docker instalado" "$(command -v docker >/dev/null 2>&1 && echo pass || echo fail)"
 check "Docker Compose" "$(docker compose version >/dev/null 2>&1 && echo pass || echo fail)"
 if command -v docker >/dev/null 2>&1; then
-    for c in hubleads-postgres hubleads-pocketbase hubleads-evolution; do
+    for c in hubleads-pocketbase; do
         if docker ps --format '{{.Names}}' | grep -q "$c"; then
             check "$c" pass
         else

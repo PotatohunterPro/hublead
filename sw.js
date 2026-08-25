@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hubleads-v4';
+const CACHE_NAME = 'hubleads-v5';
 const ASSETS = [
   '/',
   '/index.html',
@@ -32,7 +32,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        keys.filter((key) => key !== CACHE_NAME && !key.endsWith('-tiles')).map((key) => caches.delete(key))
       );
     })
   );
@@ -41,25 +41,32 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
-  // API do PocketBase: SEMPRE busca na rede (nunca em cache), p/ dados atualizados
+
+  // PocketBase API: SEMPRE busca na rede
   if (event.request.url.includes('/api/')) {
     event.respondWith(fetch(event.request).catch(() => new Response('{}', { status: 503 })));
     return;
   }
+
+  // OpenStreetMap Tiles: Cache First com fallback de rede
   if (event.request.url.includes('tile.openstreetmap.org')) {
     event.respondWith(
       caches.match(event.request).then((cached) => {
         return cached || fetch(event.request).then((response) => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME + '-tiles').then((cache) => {
-            cache.put(event.request, clone);
-          });
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME + '-tiles').then((cache) => {
+              cache.put(event.request, clone);
+            });
+          }
           return response;
-        });
+        }).catch(() => cached);
       })
     );
     return;
   }
+
+  // Assets Estáticos PWA
   event.respondWith(
     caches.match(event.request).then((cached) => {
       const fetchPromise = fetch(event.request).then((response) => {

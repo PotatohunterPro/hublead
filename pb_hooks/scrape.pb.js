@@ -1,151 +1,184 @@
 // ============================================================
 //  HUB LEADS — Custom PocketBase Hooks
-//  Scraping sob demanda + geocoding + gestão de leads no mapa
+//  Scraping sob demanda + BrasilAPI + Geocoding Nominatim
 //
 //  Endpoints:
-//    POST   /api/scrape/url           → adiciona lead de URL da Casa dos Dados
+//    POST   /api/scrape/url           → extrai CNPJ e adiciona lead via BrasilAPI + Geocode
+//    GET    /api/scrape/cnpj/:cnpj    → consulta direta CNPJ na BrasilAPI (usado no form)
+//    POST   /api/scrape/batch         → adiciona múltiplos CNPJs de uma vez
 //    GET    /api/scrape/leads         → lista leads do mapa (com filtros)
-//    PATCH  /api/scrape/leads/:id     → atualiza status/coords de um lead
+//    PATCH  /api/scrape/leads/:id     → atualiza status/coords/dados de um lead
 //    GET    /api/scrape/geocode       → geocoding de um endereço (Nominatim)
 // ============================================================
 
-const SCRAPE_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
-const GEO_USER_AGENT = 'HubLeads/1.0 (contato@hubsolucao.com.br)';
+const GEO_USER_AGENT = 'HubLeads/2.0 (contato@hubsolucao.com.br)';
+const BRASIL_API_BASE = 'https://brasilapi.com.br/api/cnpj/v1';
 
 // ---------- helpers ----------
-function extractNumber(str) {
-  return (str || '').replace(/\D/g, '');
+function extractCnpjs(str) {
+  if (!str) return [];
+  const matches = String(str).match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}|\d{14}/g) || [];
+  const cleanList = matches.map(c => c.replace(/\D/g, '')).filter(c => c.length === 14);
+  return Array.from(new Set(cleanList));
 }
 
 function cleanText(str) {
   return (str || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-// Busca um pattern e retorna o grupo, com fallback de lista de patterns
-function matchFirst(html, patterns) {
-  for (const re of patterns) {
-    const m = html.match(re);
-    if (m && m[1]) return m[1];
-  }
-  return '';
+function getRequestBody(c) {
+  try {
+    if (typeof c.bind === 'function') {
+      const data = {};
+      c.bind(data);
+      if (Object.keys(data).length > 0) return data;
+    }
+  } catch (e) {}
+  try {
+    const info = $apis.requestInfo(c);
+    if (info && info.data) return info.data;
+  } catch (e) {}
+  try {
+    const req = c.requestInfo ? c.requestInfo() : null;
+    if (req && req.body) return typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    if (req && req.data) return req.data;
+  } catch (e) {}
+  return {};
 }
 
-// Extrai dados do HTML da Casa dos Dados
-function parseCompanyHtml(html) {
-  const cnpjRaw = matchFirst(html, [
-    /(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/,
-    /(\d{14})/,
-    /CNPJ[^:\d]*[:>]?\s*([\d.\/\-]{14,18})/i
-  ]);
-  const cnpj = extractNumber(cnpjRaw);
+// ---------- consulta BrasilAPI ----------
+async function fetchBrasilApiCnpj(cnpj) {
+  const clean = String(cnpj).replace(/\D/g, '');
+  if (clean.length !== 14) return null;
 
-  const razaoSocial = matchFirst(html, [
-    /<h1[^>]*>([\s\S]*?)<\/h1>/i,
-    /<title>([^<]+)<\/title>/i,
-    /razao[sS]ocial[^:]*[:>]?\s*([^<\n]{3,120})/i
-  ]);
+  try {
+    const resp = await $http.send({
+      url: `${BRASIL_API_BASE}/${clean}`,
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': GEO_USER_AGENT
+      },
+      timeout: 15000
+    });
 
-  const endereco = matchFirst(html, [
-    /<div[^>]*class="[^"]*(?:endereco|address)[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-    /endereco[^:]*[:>]?\s*([^<\n]{5,160})/i,
-    /(RUA|AV\.?|AVENIDA|AL\.?)[^<\n]{4,120}/i
-  ]);
+    if (resp.statusCode !== 200) {
+      return null;
+    }
 
-  const cnae = matchFirst(html, [
-    /CNAE[^:\d]*[:>]?\s*([\d.]{4,8})/i,
-    /(?:codigo|cod).{0,30}CNAE/i
-  ]);
+    const data = JSON.parse(resp.raw);
+    const logradouroFull = [
+      data.descricao_tipo_de_logradouro,
+      data.logradouro,
+      data.numero ? 'nº ' + data.numero : 'S/N',
+      data.complemento
+    ].filter(Boolean).join(' ');
 
-  const telefone = matchFirst(html, [
-    /\(?(\d{2})\)?[\s.-]*(\d{4,5})[\s.-]*(\d{4})/g,
-    /telefone[^:]*[:>]?\s*([^<\n]{8,30})/i
-  ]).replace(/[^\d()\-+\s.]/g, '').trim();
+    const endereco = [logradouroFull, data.bairro].filter(Boolean).join(' - ');
+    const cidade = [data.municipio, data.uf].filter(Boolean).join(' - ');
 
-  const cidade = matchFirst(html, [
-    /(\w[\w\sÀ-ú-]{2,40})\s*-\s*([A-Z]{2})(?:\s|$|<\/)/,
-    /municipio[^:]*[:>]?\s*([^<\n]{3,60})/i
-  ]);
+    let tel = data.ddd_telefone_1 || data.ddd_telefone_2 || '';
+    if (tel) {
+      const numClean = tel.replace(/\D/g, '');
+      if (numClean.length === 10) {
+        tel = `(${numClean.slice(0, 2)}) ${numClean.slice(2, 6)}-${numClean.slice(6)}`;
+      } else if (numClean.length === 11) {
+        tel = `(${numClean.slice(0, 2)}) ${numClean.slice(2, 7)}-${numClean.slice(7)}`;
+      }
+    }
 
-  return {
-    cnpj,
-    razaoSocial: cleanText(razaoSocial),
-    endereco: cleanText(endereco),
-    cnae,
-    telefone,
-    cidade: cleanText(cidade),
-    urlOriginal: null
-  };
+    return {
+      cnpj: clean,
+      razaoSocial: cleanText(data.razao_social || ''),
+      nomeFantasia: cleanText(data.nome_fantasia || ''),
+      empresa: cleanText(data.nome_fantasia || data.razao_social || 'Empresa ' + clean),
+      cnae: data.cnae_fiscal ? `${data.cnae_fiscal}${data.cnae_fiscal_descricao ? ' - ' + data.cnae_fiscal_descricao : ''}` : '',
+      telefone: tel,
+      email: cleanText(data.email || ''),
+      endereco: cleanText(endereco),
+      cidade: cleanText(cidade),
+      cep: cleanText(data.cep || ''),
+      bairro: cleanText(data.bairro || ''),
+      uf: cleanText(data.uf || '')
+    };
+  } catch (e) {
+    $app.logger().error('Erro ao consultar BrasilAPI', { cnpj: clean, error: e.message });
+    return null;
+  }
 }
 
 // ---------- geocoding Nominatim ----------
-async function geocodeAddress(endereco) {
-  if (!endereco) return null;
-  try {
-    const resp = await $http.send({
-      url: `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(endereco)}&format=json&limit=1&countrycodes=br`,
-      method: 'GET',
-      headers: { 'User-Agent': GEO_USER_AGENT },
-      timeout: 15000
-    });
-    const data = JSON.parse(resp.raw);
-    if (Array.isArray(data) && data.length > 0) {
-      return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+async function geocodeAddress(endereco, cidade, cep) {
+  const tentativas = [];
+  if (endereco && cidade) tentativas.push(`${endereco}, ${cidade}, Brasil`);
+  if (cep) tentativas.push(`${cep}, Brasil`);
+  if (cidade) tentativas.push(`${cidade}, Brasil`);
+
+  for (const q of tentativas) {
+    try {
+      const resp = await $http.send({
+        url: `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=br`,
+        method: 'GET',
+        headers: { 'User-Agent': GEO_USER_AGENT },
+        timeout: 10000
+      });
+      const data = JSON.parse(resp.raw);
+      if (Array.isArray(data) && data.length > 0 && data[0].lat && data[0].lon) {
+        return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+      }
+    } catch (e) {
+      // tenta a próxima consulta
     }
-  } catch (e) {
-    $app.logger().error('Geocoding falhou', { error: e.message, endereco });
   }
   return null;
 }
 
-// ---------- validação de URL ----------
-function isCasaDadosUrl(url) {
-  try {
-    const u = new URL(url);
-    return u.hostname.includes('casadosdados.com.br') && u.pathname.includes('cnpj');
-  } catch (e) {
-    return false;
+// ============================================================
+//  GET /api/scrape/cnpj/:cnpj  (Consulta rápida no form)
+// ============================================================
+routerAdd('GET', '/api/scrape/cnpj/:cnpj', async (c) => {
+  const cnpjParam = c.pathParam('cnpj');
+  const clean = (cnpjParam || '').replace(/\D/g, '');
+  if (clean.length !== 14) {
+    return c.json(400, { error: 'CNPJ inválido. Forneça 14 dígitos.' });
   }
-}
+
+  const dados = await fetchBrasilApiCnpj(clean);
+  if (!dados) {
+    return c.json(404, { error: 'CNPJ não encontrado na base da Receita Federal.' });
+  }
+
+  const coords = await geocodeAddress(dados.endereco, dados.cidade, dados.cep);
+  dados.coords = coords;
+
+  return c.json(200, { success: true, lead: dados });
+});
 
 // ============================================================
-//  POST /api/scrape/url
+//  POST /api/scrape/url  (Suporta URL ou CNPJ avulso)
 // ============================================================
 routerAdd('POST', '/api/scrape/url', async (c) => {
-  const { url, hunterId } = c.body() || {};
+  const body = getRequestBody(c);
+  const input = body.url || body.cnpj || body.input || '';
+  const hunterId = body.hunterId || '';
 
-  if (!url || !isCasaDadosUrl(url)) {
+  const cnpjs = extractCnpjs(input);
+  if (cnpjs.length === 0) {
     return c.json(400, {
-      error: 'URL inválida. Deve ser um link de empresa da Casa dos Dados (casadosdados.com.br/solucao/cnpj/...).'
+      error: 'Nenhum CNPJ válido encontrado. Cole o link da Casa dos Dados ou digite o CNPJ.'
     });
   }
 
+  const cnpj = cnpjs[0];
+
   try {
-    // 1. Buscar página
-    const resp = await $http.send({
-      url,
-      method: 'GET',
-      headers: {
-        'User-Agent': SCRAPE_USER_AGENT,
-        'Accept-Language': 'pt-BR,pt;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml'
-      },
-      timeout: 20000
-    });
+    // 1. Verificar se o CNPJ já existe no PocketBase
+    let existente = null;
+    try {
+      const records = $app.dao().findRecordsByExpr('leads', $dbx.exp('cnpj = {:cnpj}', { cnpj }));
+      if (records && records.length > 0) existente = records[0];
+    } catch (e) {}
 
-    const html = resp.raw;
-    const dados = parseCompanyHtml(html);
-
-    if (!dados.cnpj) {
-      return c.json(400, {
-        error: 'Não foi possível extrair o CNPJ da página. O site pode ter mudado — verifique a URL ou insira os dados manualmente.'
-      });
-    }
-
-    // 2. Verificar se o CNPJ já existe
-    const existente = $app.dao().findRecordsByExpr(
-      'leads',
-      $dbx.exp('cnpj = {:cnpj}', { cnpj: dados.cnpj })
-    )[0];
     if (existente) {
       const out = existente.export();
       delete out['@collectionId'];
@@ -153,44 +186,114 @@ routerAdd('POST', '/api/scrape/url', async (c) => {
       return c.json(200, { success: true, lead: out, duplicado: true });
     }
 
-    // 3. Geocoding
-    const coords = await geocodeAddress(dados.endereco + (dados.cidade ? ', ' + dados.cidade : ''));
+    // 2. Buscar dados oficiais na BrasilAPI
+    const dados = await fetchBrasilApiCnpj(cnpj);
+    if (!dados) {
+      return c.json(404, {
+        error: `Não foi possível localizar os dados do CNPJ ${cnpj} na Receita Federal.`
+      });
+    }
 
-    // 4. Salvar lead
-    const lead = new Record($app.dao().findCollectionByNameOrId('leads'), {
+    // 3. Geocoding
+    const coords = await geocodeAddress(dados.endereco, dados.cidade, dados.cep);
+
+    // 4. Salvar lead no banco
+    const col = $app.dao().findCollectionByNameOrId('leads');
+    const lead = new Record(col, {
       cnpj: dados.cnpj,
-      empresa: dados.razaoSocial || 'Empresa ' + dados.cnpj,
+      empresa: dados.empresa,
+      razaoSocial: dados.razaoSocial,
       endereco: dados.endereco,
       cnae: dados.cnae,
       telefone: dados.telefone,
+      email: dados.email,
       cidade: dados.cidade,
+      cep: dados.cep,
       coords: coords,
       status: 'pendente',
       hunterId: hunterId || '',
-      fonte: 'casa_dados',
-      urlOriginal: url,
+      fonte: input.includes('casadosdados.com.br') ? 'casa_dados' : 'brasil_api',
+      urlOriginal: input.startsWith('http') ? input : null,
       dataAdicionado: new Date().toISOString()
     });
-    $app.dao().saveRecord(lead);
 
-    $app.logger().info('Lead adicionado via scraping', { cnpj: dados.cnpj, empresa: dados.razaoSocial });
+    $app.dao().saveRecord(lead);
+    $app.logger().info('Lead adicionado', { cnpj: dados.cnpj, empresa: dados.empresa });
 
     const out = lead.export();
     delete out['@collectionId'];
     delete out['@collectionName'];
     return c.json(200, { success: true, lead: out });
   } catch (error) {
-    $app.logger().error('Scraping falhou', { error: error.message, url });
-    return c.json(500, { error: 'Falha ao fazer scraping: ' + error.message });
+    $app.logger().error('Falha ao adicionar lead', { error: error.message, input });
+    return c.json(500, { error: 'Falha ao processar lead: ' + error.message });
   }
 }, $apis.activityLogger($app));
 
 // ============================================================
-//  GET /api/scrape/leads?status=pendente&limit=100&page=1
+//  POST /api/scrape/batch (Adiciona múltiplos CNPJs em lote)
+// ============================================================
+routerAdd('POST', '/api/scrape/batch', async (c) => {
+  const body = getRequestBody(c);
+  const text = body.text || body.cnpjs || '';
+  const hunterId = body.hunterId || '';
+
+  const cnpjs = extractCnpjs(text);
+  if (cnpjs.length === 0) {
+    return c.json(400, { error: 'Nenhum CNPJ válido encontrado no texto.' });
+  }
+
+  const resultados = [];
+  const col = $app.dao().findCollectionByNameOrId('leads');
+
+  for (const cnpj of cnpjs.slice(0, 20)) { // limite de 20 por lote p/ evitar timeout
+    try {
+      // Verifica se já existe
+      const existente = $app.dao().findRecordsByExpr('leads', $dbx.exp('cnpj = {:cnpj}', { cnpj }))[0];
+      if (existente) {
+        resultados.push({ cnpj, status: 'duplicado', lead: existente.export() });
+        continue;
+      }
+
+      const dados = await fetchBrasilApiCnpj(cnpj);
+      if (!dados) {
+        resultados.push({ cnpj, status: 'nao_encontrado' });
+        continue;
+      }
+
+      const coords = await geocodeAddress(dados.endereco, dados.cidade, dados.cep);
+      const lead = new Record(col, {
+        cnpj: dados.cnpj,
+        empresa: dados.empresa,
+        razaoSocial: dados.razaoSocial,
+        endereco: dados.endereco,
+        cnae: dados.cnae,
+        telefone: dados.telefone,
+        email: dados.email,
+        cidade: dados.cidade,
+        coords: coords,
+        status: 'pendente',
+        hunterId: hunterId || '',
+        fonte: 'brasil_api',
+        dataAdicionado: new Date().toISOString()
+      });
+
+      $app.dao().saveRecord(lead);
+      resultados.push({ cnpj, status: 'adicionado', lead: lead.export() });
+    } catch (e) {
+      resultados.push({ cnpj, status: 'erro', error: e.message });
+    }
+  }
+
+  return c.json(200, { success: true, total: cnpjs.length, resultados });
+});
+
+// ============================================================
+//  GET /api/scrape/leads?status=pendente&limit=500&page=1
 // ============================================================
 routerAdd('GET', '/api/scrape/leads', (c) => {
   const status = c.queryParam('status') || '';
-  const limit = parseInt(c.queryParam('limit') || '100', 10);
+  const limit = parseInt(c.queryParam('limit') || '500', 10);
   const page = parseInt(c.queryParam('page') || '1', 10);
 
   let query = $app.dao().findRecordsByFilter(
@@ -212,11 +315,10 @@ routerAdd('GET', '/api/scrape/leads', (c) => {
 
 // ============================================================
 //  PATCH /api/scrape/leads/:id
-//  Body: { status, coords, hunterId, empresa, telefone }
 // ============================================================
 routerAdd('PATCH', '/api/scrape/leads/:id', (c) => {
   const id = c.pathParam('id');
-  const body = c.body() || {};
+  const body = getRequestBody(c);
   let lead;
   try {
     lead = $app.dao().findRecordById('leads', id);
@@ -234,6 +336,9 @@ routerAdd('PATCH', '/api/scrape/leads/:id', (c) => {
   if (body.hunterId !== undefined) lead.set('hunterId', body.hunterId);
   if (body.empresa) lead.set('empresa', body.empresa);
   if (body.telefone !== undefined) lead.set('telefone', body.telefone);
+  if (body.nomeContato !== undefined) lead.set('nomeContato', body.nomeContato);
+  if (body.zapContato !== undefined) lead.set('zapContato', body.zapContato);
+  if (body.segmento !== undefined) lead.set('segmento', body.segmento);
 
   $app.dao().saveRecord(lead);
   return c.json(200, { success: true, lead: lead.export() });

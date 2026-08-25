@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  HUB LEADS — Atualizador idempotente
-#  Sem git pull hardcoded; usa a pasta local + loop de migrations
+#  Atualiza Frontend, PocketBase Hooks, Nginx e Docker Compose
+#  Uso: sudo bash update.sh
 # =============================================================================
 set -Eeuo pipefail
 
@@ -21,108 +22,86 @@ err()   { echo -e "${C_RED}[hubleads] ERRO${C_RESET}  $*" | tee -a "$LOG_FILE"; 
 on_error() { err "Falha na linha $1"; exit 1; }
 trap 'on_error $LINENO' ERR
 
-if [ "$(id -u)" -ne 0 ]; then err "Execute com sudo"; exit 1; fi
-if [ ! -f "${APP_DIR}/compose.yaml" ]; then err "Instalação não encontrada. Rode install.sh"; exit 1; fi
+if [ "$(id -u)" -ne 0 ]; then err "Execute com sudo: sudo bash update.sh"; exit 1; fi
+if [ ! -f "${APP_DIR}/compose.yaml" ]; then err "Instalação não encontrada em ${APP_DIR}. Execute install.sh primeiro."; exit 1; fi
+
+info "=== HUB LEADS — Iniciando atualização ==="
 
 # 1. Backup de segurança antes de atualizar
 if [ -f "${SCRIPT_DIR}/backup.sh" ]; then
-    info "Backup de segurança antes da atualização..."
+    info "Executando backup de segurança..."
     bash "${SCRIPT_DIR}/backup.sh" || warn "Backup pré-update falhou (continuando)"
 fi
 
-# 2. Atualizar arquivos (compose, frontend, nginx) da pasta local
+# 2. Atualizar arquivos da pasta local
 cd "$SCRIPT_DIR"
 PROJECT_ROOT="${SCRIPT_DIR}/.."
-if [ -f compose.yaml ]; then
-    cp compose.yaml "${APP_DIR}/compose.yaml"
+
+# Compose
+if [ -f "${SCRIPT_DIR}/compose.yaml" ]; then
+    cp "${SCRIPT_DIR}/compose.yaml" "${APP_DIR}/compose.yaml"
     sed -i 's|\.\./pb_hooks|./pb_hooks|g' "${APP_DIR}/compose.yaml"
     ok "compose.yaml atualizado"
 fi
-# Frontend na raiz do projeto: index.html, js/, css/, assets/, sw.js, manifest.json
+
+# Frontend (raiz do projeto: index.html, manifest.json, sw.js, js/, css/, assets/)
 if [ -f "${PROJECT_ROOT}/index.html" ]; then
     mkdir -p /var/www/hublead
     for f in index.html manifest.json sw.js; do
         [ -f "${PROJECT_ROOT}/${f}" ] && cp "${PROJECT_ROOT}/${f}" /var/www/hublead/${f}
     done
     for d in js css assets; do
-        [ -d "${PROJECT_ROOT}/${d}" ] && cp -r "${PROJECT_ROOT}/${d}/." /var/www/hublead/${d}/
+        if [ -d "${PROJECT_ROOT}/${d}" ]; then
+            mkdir -p "/var/www/hublead/${d}"
+            cp -r "${PROJECT_ROOT}/${d}/." "/var/www/hublead/${d}/"
+        fi
     done
     chown -R www-data:www-data /var/www/hublead 2>/dev/null || true
     chmod -R 755 /var/www/hublead
-    ok "Frontend atualizado"
+    ok "Frontend e assets atualizados em /var/www/hublead"
 fi
+
+# PocketBase Hooks
 if [ -d "${PROJECT_ROOT}/pb_hooks" ]; then
     mkdir -p "${APP_DIR}/pb_hooks"
     cp -r "${PROJECT_ROOT}/pb_hooks/." "${APP_DIR}/pb_hooks/"
     ok "pb_hooks atualizados"
 fi
-if [ -d "${PROJECT_ROOT}/pg-init" ]; then
-    mkdir -p "${APP_DIR}/pg-init"
-    cp -r "${PROJECT_ROOT}/pg-init/." "${APP_DIR}/pg-init/"
-    ok "pg-init atualizado"
-fi
-# Nginx: copia nginx.conf e o site (para pegar mudancas de proxy/config)
-if [ -f "${PROJECT_ROOT}/nginx/nginx.conf" ]; then
-    cp "${PROJECT_ROOT}/nginx/nginx.conf" /etc/nginx/nginx.conf
+
+# Nginx: copia configurações
+if [ -f "${SCRIPT_DIR}/nginx/nginx.conf" ]; then
+    cp "${SCRIPT_DIR}/nginx/nginx.conf" /etc/nginx/nginx.conf
     ok "nginx.conf atualizado"
 fi
-if [ -f "${PROJECT_ROOT}/nginx/sites/hublead-http.conf" ]; then
-    cp "${PROJECT_ROOT}/nginx/sites/hublead-http.conf" "${APP_DIR}/hublead-http.conf"
-    ok "hublead-http.conf atualizado"
-fi
-if [ -f "${PROJECT_ROOT}/nginx/sites/hublead.conf" ]; then
-    cp "${PROJECT_ROOT}/nginx/sites/hublead.conf" "$NGINX_SITE"
-    sed -i "s|__DOMAIN__|$(grep DOMAIN "${APP_DIR}/.env" 2>/dev/null | cut -d= -f2 || echo "hublead.pradodacostasolucoes.com.br")|g" "$NGINX_SITE"
+
+if [ -f "${SCRIPT_DIR}/nginx/sites/hublead.conf" ]; then
+    DOMAIN="$(grep DOMAIN "${APP_DIR}/.env" 2>/dev/null | cut -d= -f2 || echo "hublead.pradodacostasolucoes.com.br")"
+    cp "${SCRIPT_DIR}/nginx/sites/hublead.conf" "$NGINX_SITE"
+    sed -i "s|__DOMAIN__|${DOMAIN}|g" "$NGINX_SITE"
     ln -sf "$NGINX_SITE" "$NGINX_SITE_ENABLED"
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-    ok "hublead.conf (site) atualizado"
+    ok "Nginx site ($DOMAIN) atualizado"
 fi
 
-# ---- Funções de migration (definidas ANTES do loop) ----
-# Adicionar novas no formato migration_00X_nome
-migration_001_inicial() {
-    # Migração de exemplo — nada a fazer na primeira execução
-    return 0
-}
-
-# 3. Loop de migrations (aplicar upgrades na ordem, idempotente)
-#    Encontra funções migration_* definidas acima e aplica as ainda não rodadas.
-MIGRATIONS_FILE="${APP_DIR}/.migrations_applied"
-touch "$MIGRATIONS_FILE"
-# Lista segura: nome exato das funções "migration_*" já definidas
-MIGS=($(compgen -A function | grep '^migration_' | sort))
-for mig in "${MIGS[@]}"; do
-    if ! grep -qx "$mig" "$MIGRATIONS_FILE" 2>/dev/null; then
-        info "Aplicando $mig..."
-        "$mig"
-        echo "$mig" >> "$MIGRATIONS_FILE"
-        ok "$mig aplicada"
-    else
-        ok "$mig já aplicada (skip)"
-    fi
-done
-
-# 4. Rebuild/recreate containers
+# 3. Rebuild / recreate containers
 cd "$APP_DIR"
 set -a; [ -f .env ] && source .env; set +a
-docker compose pull || warn "pull falhou"
-docker compose up -d --remove-orphans
-ok "Containers recriados"
 
-# 4b. Garante banco evolution (criado pelo initdb no 1o boot; fallback idempotente)
-if docker ps --format '{{.Names}}' | grep -q hubleads-postgres; then
-    for i in $(seq 1 30); do
-        if docker exec hubleads-postgres pg_isready -U postgres >/dev/null 2>&1; then break; fi
-        sleep 2
-    done
-    docker exec hubleads-postgres psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='evolution'" | grep -q 1 \
-        || docker exec hubleads-postgres psql -U postgres -c "CREATE DATABASE evolution"
-    docker restart hubleads-evolution >/dev/null 2>&1 || true
+info "Atualizando e reiniciando containers..."
+docker compose pull >/dev/null 2>&1 || warn "docker compose pull falhou (tentando direto)"
+docker compose up -d --remove-orphans
+ok "Containers iniciados e órfãos removidos"
+
+# 4. Reload Nginx
+if command -v nginx >/dev/null 2>&1; then
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || warn "Reload do Nginx com aviso"
+    ok "Nginx recarregado"
 fi
 
-# 5. Reload nginx
-systemctl reload nginx >/dev/null 2>&1 || true
-
-# 6. Self-test rápido
+# 5. Status final
+echo ""
+info "Status dos containers:"
 docker compose ps
-ok "Atualização concluída"
+echo ""
+ok "=== Atualização concluída com sucesso! ==="
+ok "Acesse: https://${DOMAIN:-hublead.pradodacostasolucoes.com.br}/"

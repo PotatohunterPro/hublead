@@ -207,12 +207,10 @@ ensure_secrets() {
         ok ".env existente preservado"
         return
     fi
-    POSTGRES_PASSWORD="$(openssl rand -hex 16)"
     PB_ENCRYPTION_KEY="$(openssl rand -hex 32)"
-    EVOLUTION_API_KEY="$(openssl rand -hex 20)"
     DOMAIN="${DOMAIN_OVERRIDE:-$DOMAIN_DEFAULT}"
     SSL_EMAIL="${SSL_EMAIL_DEFAULT}"
-    export POSTGRES_PASSWORD PB_ENCRYPTION_KEY EVOLUTION_API_KEY DOMAIN SSL_EMAIL
+    export PB_ENCRYPTION_KEY DOMAIN SSL_EMAIL
     ok "Segredos gerados"
 }
 
@@ -242,16 +240,8 @@ write_env() {
 DOMAIN=${DOMAIN}
 SSL_EMAIL=${SSL_EMAIL}
 
-# PostgreSQL
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-POSTGRES_DB=hubleads
-
 # PocketBase
 PB_ENCRYPTION_KEY=${PB_ENCRYPTION_KEY}
-
-# Evolution API
-EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
-EVOLUTION_INSTANCE_NAME=hub_hunter
 
 COMPOSE_PROJECT_NAME=hubleads
 EOF
@@ -333,29 +323,6 @@ wait_health() {
     done
     err "Timeout no healthcheck. Execute: docker compose -f $APP_DIR/compose.yaml logs"
     exit 1
-}
-
-# ----------------------------------------------------------------------------
-#  FASE 10b — Banco evolution (Evolution API exige DB proprio no Postgres)
-# ----------------------------------------------------------------------------
-ensure_evolution_db() {
-    info "FASE 10b/16 — Banco evolution"
-    # Espera o Postgres aceitar conexoes (1o boot roda initdb e pode demorar)
-    local i
-    for i in $(seq 1 30); do
-        if docker exec hubleads-postgres pg_isready -U postgres >/dev/null 2>&1; then break; fi
-        sleep 2
-    done
-    if docker exec hubleads-postgres psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='evolution'" | grep -q 1; then
-        ok "Banco evolution ja existe"
-    else
-        docker exec hubleads-postgres psql -U postgres -c "CREATE DATABASE evolution"
-        ok "Banco evolution criado"
-    fi
-    # Garante que a Evolution API suba depois do banco existir (initdb so roda no 1o boot)
-    if docker ps --format '{{.Names}}' | grep -q hubleads-evolution; then
-        docker restart hubleads-evolution >/dev/null 2>&1 || true
-    fi
 }
 
 # ----------------------------------------------------------------------------
@@ -475,13 +442,9 @@ write_summary() {
 ## URLs
 - App: https://${DOMAIN}/
 - PocketBase Admin: https://${DOMAIN}/_/
-- Evolution API: https://${DOMAIN}/evolution/
 
 ## Credenciais
 - PocketBase Admin: admin@hubsolucao.com.br / (senha gerada manualmente no 1º acesso)
-- Evolution API Key: $(grep EVOLUTION_API_KEY "$ENV_FILE" | cut -d= -f2)
-- Evolution Instância: hub_hunter
-- PostgreSQL: postgres / $(grep POSTGRES_PASSWORD "$ENV_FILE" | cut -d= -f2)
 
 ## Comandos
 - Status: cd ${APP_DIR} && docker compose ps
@@ -506,10 +469,8 @@ self_test() {
     # UFW
     if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then ok "UFW OK"; else warn "UFW inativo"; fi
     # Portas públicas
-    if ss -tlnp 2>/dev/null | grep -E ":8080|:8090" | grep -q "127.0.0.1"; then
-        ok "Portas 8080/8090 restritas a localhost"
-    else
-        warn "Portas 8080/8090 podem estar expostas"
+    if ss -tlnp 2>/dev/null | grep -E ":8090" | grep -q "127.0.0.1"; then
+        ok "Porta 8090 restrita a localhost"
     fi
 
     if [ "$fail" -eq 0 ]; then
@@ -542,7 +503,6 @@ main() {
             write_env
             deploy_files
             compose_up
-            ensure_evolution_db
             wait_health
             setup_nginx
             setup_ssl

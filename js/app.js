@@ -1,7 +1,10 @@
+// ============================================================
+//  HUB LEADS — App Controller
+//  Controle de navegação, temas, configurações e métricas
+// ============================================================
+
 const App = {
   currentTab: 'resumo',
-  tabs: {},
-  sheets: {},
 
   init() {
     this.initSplash();
@@ -10,16 +13,19 @@ const App = {
     this.initConfig();
     this.initOfflineBar();
     this.initOnlineListener();
+
     CAMERA.init('fotoInput', 'photoPreview');
     FORM.init('leadForm', 'btnSalvarLead');
     MAPA.init('mapContainer');
+
     this.atualizarBadge();
     this.atualizarDashboard();
     this.carregarFila();
     this.carregarHistorico();
-    this.iniciarPolling();
+    this.iniciarPollingFila();
+
     setTimeout(() => {
-      if (this.map) MAPA.refresh();
+      if (typeof MAPA !== 'undefined') MAPA.refresh();
     }, 500);
   },
 
@@ -31,7 +37,7 @@ const App = {
       splash.classList.add('hidden');
       setTimeout(() => splash.remove(), 300);
       if (!pronto) this.abrirConfig(true);
-    }, pronto ? 1500 : 2200);
+    }, pronto ? 1200 : 2000);
   },
 
   initTheme() {
@@ -56,10 +62,23 @@ const App = {
     this.currentTab = tab;
     document.querySelectorAll('.bottom-nav-item').forEach(i => i.classList.toggle('active', i.dataset.tab === tab));
     document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === `tab${tab.charAt(0).toUpperCase() + tab.slice(1)}`));
-    if (tab === 'mapa') MAPA.refresh();
-    if (tab === 'fila') { this.carregarFila(); this.carregarHistorico(); }
-    if (tab === 'resumo') this.atualizarDashboard();
-    if (tab === 'sugeridos') SUGERIDOS.refresh();
+
+    if (tab === 'lead') {
+      if (typeof FORM !== 'undefined') FORM.prepararGeolocalizacao();
+    }
+    if (tab === 'mapa') {
+      if (typeof MAPA !== 'undefined') MAPA.refresh();
+    }
+    if (tab === 'fila') {
+      this.carregarFila();
+      this.carregarHistorico();
+    }
+    if (tab === 'resumo') {
+      this.atualizarDashboard();
+    }
+    if (tab === 'sugeridos') {
+      if (typeof SUGERIDOS !== 'undefined') SUGERIDOS.refresh();
+    }
   },
 
   initConfig() {
@@ -67,24 +86,14 @@ const App = {
     const btnSalvar = document.getElementById('btnSalvarConfig');
     const overlay = document.getElementById('configOverlay');
     const closeBtn = document.getElementById('btnFecharConfig');
+
     if (btnConfig) btnConfig.addEventListener('click', () => this.abrirConfig());
     if (btnSalvar) btnSalvar.addEventListener('click', () => this.salvarConfig());
     if (closeBtn) closeBtn.addEventListener('click', () => this.fecharConfig());
-    const btnQr = document.getElementById('btnRefreshQr');
-    if (btnQr) btnQr.addEventListener('click', () => this.carregarQrCode());
-    if (overlay) overlay.addEventListener('click', (e) => {
-      if (e.target === overlay && !overlay.dataset.required) this.fecharConfig();
-    });
 
-    const btnToggle = document.getElementById('btnToggleAvancadas');
-    const avancadas = document.getElementById('configAvancadas');
-    if (btnToggle && avancadas) {
-      btnToggle.addEventListener('click', () => {
-        const open = avancadas.style.display === 'block';
-        avancadas.style.display = open ? 'none' : 'block';
-        btnToggle.innerHTML = open
-          ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg> Configurações avançadas'
-          : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg> Ocultar';
+    if (overlay) {
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay && !overlay.dataset.required) this.fecharConfig();
       });
     }
   },
@@ -92,31 +101,22 @@ const App = {
   abrirConfig(required = false) {
     const overlay = document.getElementById('configOverlay');
     if (!overlay) return;
+
     const cfg = API.getConfig();
     const hunter = API.getHunter();
-    document.getElementById('configApiUrl').value = cfg.apiUrl || '';
-    document.getElementById('configApiKey').value = cfg.apiKey || '';
-    document.getElementById('configGrupoId').value = cfg.grupoId || '';
-    const selEnvio = document.getElementById('configEnvioManual');
-    if (selEnvio) selEnvio.value = cfg.envioManual || 'auto';
-    const numEnvio = document.getElementById('configNumeroEnvio');
-    if (numEnvio) numEnvio.value = cfg.numeroEnvio || '';
+
     document.getElementById('configHunterNome').value = hunter.nome || '';
     document.getElementById('configHunterCelular').value = hunter.celular || '';
+    document.getElementById('configNumeroEnvio').value = cfg.numeroEnvio || '';
+    document.getElementById('configCasaDadosApiKey').value = cfg.casaDadosApiKey || '';
+
     const title = document.getElementById('configModalTitle');
     if (title) title.textContent = required ? 'Bem-vindo ao Hub Leads' : 'Configurações';
     const cancelBtn = document.getElementById('btnFecharConfig');
     if (cancelBtn) cancelBtn.style.display = required ? 'none' : '';
 
-    const avancadas = document.getElementById('configAvancadas');
-    if (avancadas) avancadas.style.display = 'none';
-    const btnToggle = document.getElementById('btnToggleAvancadas');
-    if (btnToggle) btnToggle.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg> Configurações avançadas';
-
     overlay.classList.add('visible');
     if (required) overlay.dataset.required = 'true';
-    // Checa status do WhatsApp e mostra QR se precisar
-    this.verificarWhatsApp();
   },
 
   fecharConfig() {
@@ -124,167 +124,58 @@ const App = {
     if (!overlay) return;
     overlay.classList.remove('visible');
     delete overlay.dataset.required;
-    this.pararPollConexao();
   },
 
   salvarConfig() {
     const nome = document.getElementById('configHunterNome').value.trim();
     const celular = document.getElementById('configHunterCelular').value.trim();
+
     if (!nome || !celular) {
-      this.toast('Preencha nome e celular do Hunter', 'error');
+      this.toast('Preencha seu nome e celular (WhatsApp)', 'error');
       return;
     }
+
     API.setHunter({ nome, celular });
-    const apiUrl = document.getElementById('configApiUrl').value.trim();
-    const apiKey = document.getElementById('configApiKey').value.trim();
-    const grupoId = document.getElementById('configGrupoId').value.trim();
-    const envioManual = document.getElementById('configEnvioManual')?.value || 'auto';
+
     const numeroEnvio = document.getElementById('configNumeroEnvio')?.value.trim() || '';
-    API.setConfig({ apiUrl, apiKey, grupoId, envioManual, numeroEnvio });
-    this.toast('Configuração salva!', 'success');
+    const casaDadosApiKey = document.getElementById('configCasaDadosApiKey')?.value.trim() || '';
+
+    API.setConfig({ numeroEnvio, casaDadosApiKey });
+
+    this.toast('Configurações salvas!', 'success');
     this.fecharConfig();
     this.atualizarDashboard();
-  },
-
-  async verificarWhatsApp() {
-    const dot = document.getElementById('whatsappStatusDot');
-    const txt = document.getElementById('whatsappStatusText');
-    const qr = document.getElementById('qrcodeContainer');
-    if (!dot || !txt) return;
-    dot.style.background = 'var(--color-warning)';
-    txt.textContent = 'Verificando conexão...';
-    qr.style.display = 'none';
-    const estado = await API.estadoConexao();
-    if (estado === 'open') {
-      dot.style.background = '#34c759';
-      txt.textContent = 'Conectado ao WhatsApp ✓';
-      qr.style.display = 'none';
-    } else {
-      dot.style.background = 'var(--color-warning)';
-      txt.textContent = 'Conecte o WhatsApp (escaneie o QR abaixo)';
-      qr.style.display = 'block';
-      this.carregarQrCode();
-    }
-  },
-
-  async carregarQrCode() {
-    const img = document.getElementById('qrcodeImg');
-    const qr = document.getElementById('qrcodeContainer');
-    const dot = document.getElementById('whatsappStatusDot');
-    const txt = document.getElementById('whatsappStatusText');
-    if (!img) return;
-    const dados = await API.garantirInstancia();
-    const base64 = dados?.qrcode?.base64 || dados?.base64 || null;
-    if (base64) {
-      img.src = 'data:image/png;base64,' + base64;
-      qr.style.display = 'block';
-      dot.style.background = 'var(--color-warning)';
-      txt.textContent = 'Escaneie o QR Code para conectar';
-      // Poll até conectar
-      this.pollConexao();
-    } else {
-      qr.style.display = 'block';
-      img.style.display = 'none';
-      txt.textContent = 'Não foi possível obter o QR Code. Verifique se a Evolution API está no ar em /evolution.';
-    }
-  },
-
-  // Poll da conexão WhatsApp com limite, backoff exponencial e cancelamento
-  pollConexao(tentativa = 0) {
-    const MAX = 8; // máximo de tentativas (≈ 4s+8s+16s+32s... até ~8min total)
-    clearTimeout(this._pollQr);
-    if (tentativa >= MAX) {
-      // Parou de tentar (evita polling infinito) — mas deixa o botão Atualizar ativo
-      const txt = document.getElementById('whatsappStatusText');
-      if (txt) txt.textContent = 'Aguardando escaneamento... Toque em "Atualizar QR Code" para tentar de novo.';
-      return;
-    }
-    // Backoff exponencial: 4s, 8s, 16s, 32s... (limitado a 60s)
-    const delay = Math.min(4000 * Math.pow(2, tentativa), 60000);
-    this._pollQr = setTimeout(async () => {
-      // Se o modal foi fechado, para de pollar
-      if (!document.getElementById('configOverlay')?.classList.contains('visible')) {
-        clearTimeout(this._pollQr);
-        return;
-      }
-      try {
-        const estado = await API.estadoConexao();
-        if (estado === 'open') {
-          const dot = document.getElementById('whatsappStatusDot');
-          const txt = document.getElementById('whatsappStatusText');
-          const qr = document.getElementById('qrcodeContainer');
-          if (dot) dot.style.background = '#34c759';
-          if (txt) txt.textContent = 'Conectado ao WhatsApp ✓';
-          if (qr) qr.style.display = 'none';
-        } else {
-          this.pollConexao(tentativa + 1);
-        }
-      } catch (e) {
-        console.error('Poll conexão falhou:', e);
-        this.pollConexao(tentativa + 1);
-      }
-    }, delay);
-  },
-
-  pararPollConexao() {
-    clearTimeout(this._pollQr);
   },
 
   initOfflineBar() {
     const bar = document.getElementById('offlineBar');
     if (!bar) return;
-    // Se estiver rodando local (file:// ou localhost), não tem backend /api —
-    // não é 'offline', é teste local. Não exibe a barra para não confundir.
-    const isLocal = location.protocol === 'file:' || /^localhost|127\.0\.0\.1/.test(location.hostname || '');
-    const update = async () => {
-      if (isLocal) { bar.classList.remove('visible'); return; }
-      let online = navigator.onLine;
-      if (online) {
-        // Confirma com um ping real e rápido (timeout curto)
-        online = await this.pingServidor();
-      }
-      bar.classList.toggle('visible', !online);
+
+    const update = () => {
+      const offline = !navigator.onLine;
+      bar.classList.toggle('visible', offline);
     };
+
     window.addEventListener('online', update);
     window.addEventListener('offline', update);
-    this._offlineCheck = setInterval(update, 15000);
     update();
-  },
-
-  // Faz um GET leve no servidor; true se responder rápido (com fallback de endpoint)
-  async pingServidor() {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
-    const endpoints = ['/api/health', '/api/scrape/leads?limit=1'];
-    try {
-      for (const ep of endpoints) {
-        try {
-          const resp = await fetch(ep, { signal: controller.signal, cache: 'no-store', method: 'GET' });
-          if (resp.ok) { clearTimeout(timeout); return true; }
-        } catch (e) { /* tenta o proximo */ }
-      }
-      clearTimeout(timeout);
-      return false;
-    } catch (e) {
-      clearTimeout(timeout);
-      return false;
-    }
   },
 
   initOnlineListener() {
     window.addEventListener('online', async () => {
-      // Reenvia leads do mapa salvos offline + sincroniza status
       try {
-        const flushed = await dbFlushLeadsMapaPendentes();
-        if (flushed > 0) {
-          this.toast(flushed + ' lead(s) sincronizado(s) com o mapa!', 'success');
-          SUGERIDOS.refresh();
-          MAPA.refresh();
+        const sincronizados = await dbFlushLeadsPendentes();
+        if (sincronizados > 0) {
+          this.toast(`${sincronizados} lead(s) sincronizado(s)!`, 'success');
+          if (typeof SUGERIDOS !== 'undefined') SUGERIDOS.refresh();
+          if (typeof MAPA !== 'undefined') MAPA.refresh();
         }
-      } catch (e) { console.error('Sync de leads do mapa falhou:', e); }
+      } catch (e) {
+        console.warn('Sync automático falhou:', e);
+      }
+
       API.processarFila().then(enviados => {
         if (enviados > 0) {
-          this.toast(enviados + ' lead(s) enviados da fila!', 'success');
           this.atualizarBadge();
           this.atualizarDashboard();
         }
@@ -292,30 +183,17 @@ const App = {
     });
   },
 
-  iniciarPolling() {
-    if (this._pollId) return; // evita múltiplos intervalos em re-init
-    this._pollId = setInterval(async () => {
-      try {
+  iniciarPollingFila() {
+    setInterval(async () => {
+      if (navigator.onLine) {
         const fila = await dbGetFila();
-        if (fila.length > 0 && navigator.onLine) {
-          const enviados = await API.processarFila();
-          if (enviados > 0) {
-            this.atualizarBadge();
-            this.atualizarDashboard();
-            this.carregarFila();
-          }
+        if (fila.length > 0) {
+          await API.processarFila();
+          this.atualizarBadge();
+          this.atualizarDashboard();
         }
-      } catch (e) {
-        console.error('Polling da fila falhou:', e);
       }
     }, 30000);
-  },
-
-  pararPolling() {
-    if (this._pollId) {
-      clearInterval(this._pollId);
-      this._pollId = null;
-    }
   },
 
   async atualizarBadge() {
@@ -323,6 +201,7 @@ const App = {
     const navBadge = document.querySelector('.bottom-nav-item[data-tab="fila"] .nav-badge');
     const fila = await dbGetFila();
     const total = fila.length;
+
     if (badgeHeader) {
       badgeHeader.textContent = total > 0 ? `${total} pendente${total > 1 ? 's' : ''}` : '';
       badgeHeader.classList.toggle('visible', total > 0);
@@ -336,37 +215,47 @@ const App = {
   async atualizarDashboard() {
     const tab = document.getElementById('tabResumo');
     if (!tab) return;
+
     const todos = await dbGetLeads();
     const hojeLeads = await dbGetLeadsDoDia();
     const fila = await dbGetFila();
     const historico = await dbGetHistorico(9999);
-    const totalEnviados = historico.length;
-    const comDemo = todos.filter(l => l.demo === 'Sim').length;
-    const taxaConversao = totalEnviados > 0 ? Math.round((comDemo / totalEnviados) * 100) : 0;
+
+    const totalCaptados = todos.length;
+    const convertidos = todos.filter(l => l.status === 'convertido' || l.demo === 'Sim').length;
+    const pendentes = todos.filter(l => l.status === 'pendente').length;
+    const taxaConversao = totalCaptados > 0 ? Math.round((convertidos / totalCaptados) * 100) : 0;
+
     const elHoje = document.getElementById('metricLeadsHoje');
     const elPendentes = document.getElementById('metricPendentes');
     const elConversao = document.getElementById('metricConversao');
     const elTotal = document.getElementById('metricTotal');
+
     if (elHoje) elHoje.textContent = hojeLeads.length;
-    if (elPendentes) elPendentes.textContent = fila.length;
+    if (elPendentes) elPendentes.textContent = pendentes + fila.length;
     if (elConversao) elConversao.textContent = `${taxaConversao}%`;
-    if (elTotal) elTotal.textContent = totalEnviados;
+    if (elTotal) elTotal.textContent = totalCaptados;
+
     await this.renderizarGrafico();
+
     const empty = document.getElementById('emptyDashboard');
     if (empty) {
-      empty.style.display = totalEnviados === 0 ? 'block' : 'none';
+      empty.style.display = totalCaptados === 0 ? 'block' : 'none';
     }
   },
 
   async renderizarGrafico() {
     const container = document.getElementById('chartBars');
     if (!container) return;
+
     const dias = await dbGetLeadsPorDia(7);
     const max = Math.max(...Object.values(dias), 1);
     container.innerHTML = '';
+
     Object.entries(dias).forEach(([label, valor]) => {
-      const alt = Math.max((valor / max) * 100, valor > 0 ? 8 : 4);
+      const alt = Math.max((valor / max) * 100, valor > 0 ? 10 : 4);
       const diaSem = new Date().toLocaleDateString('pt-BR') === label ? 'Hoje' : label.slice(0, 5);
+
       container.innerHTML += `
         <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%">
           <div class="chart-bar" style="height:${alt}%">
@@ -381,14 +270,17 @@ const App = {
   async carregarFila() {
     const container = document.getElementById('filaList');
     if (!container) return;
+
     const fila = await dbGetFila();
     const empty = document.getElementById('emptyFila');
+
     if (fila.length === 0) {
       container.innerHTML = '';
       if (empty) empty.style.display = 'block';
       return;
     }
     if (empty) empty.style.display = 'none';
+
     container.innerHTML = fila.map(item => `
       <div class="lead-item">
         <div class="lead-item-icon">
@@ -398,7 +290,7 @@ const App = {
           <div class="lead-item-title">${esc(item.leadData?.empresa) || 'Lead'}</div>
           <div class="lead-item-subtitle">${esc(item.leadData?.nomeContato) || '-'} — ${esc(item.leadData?.zapContato) || '-'}</div>
           <div class="lead-item-meta">
-            <span class="badge badge-warning">${item.tentativas}/3 tentativas</span>
+            <span class="badge badge-warning">Pendente de envio</span>
             <span style="font-size:11px;color:var(--color-text-tertiary)">${new Date(item.criadoEm).toLocaleString('pt-BR')}</span>
           </div>
         </div>
@@ -409,14 +301,17 @@ const App = {
   async carregarHistorico() {
     const container = document.getElementById('historicoList');
     if (!container) return;
+
     const historico = await dbGetHistorico(30);
     const empty = document.getElementById('emptyHistorico');
+
     if (historico.length === 0) {
       container.innerHTML = '';
       if (empty) empty.style.display = 'block';
       return;
     }
     if (empty) empty.style.display = 'none';
+
     container.innerHTML = historico.map(item => `
       <div class="lead-item">
         <div class="lead-item-icon" style="background:var(--color-success-subtle)">
@@ -426,26 +321,12 @@ const App = {
           <div class="lead-item-title">${esc(item.empresa) || 'Lead'}</div>
           <div class="lead-item-subtitle">${esc(item.nomeContato) || '-'} — ${esc(item.zapContato) || '-'}</div>
           <div class="lead-item-meta">
-            <span class="badge badge-success">Enviado</span>
+            <span class="badge badge-success">Salvo & Enviado</span>
             <span style="font-size:11px;color:var(--color-text-tertiary)">${item.enviadoEm || '-'}</span>
           </div>
         </div>
       </div>
     `).join('');
-  },
-
-  abrirSheet(id) {
-    const sheet = document.getElementById(id);
-    const overlay = document.getElementById(`${id}Overlay`);
-    if (sheet) sheet.classList.add('visible');
-    if (overlay) overlay.classList.add('visible');
-  },
-
-  fecharSheet(id) {
-    const sheet = document.getElementById(id);
-    const overlay = document.getElementById(`${id}Overlay`);
-    if (sheet) sheet.classList.remove('visible');
-    if (overlay) overlay.classList.remove('visible');
   },
 
   toast(mensagem, tipo = 'success') {

@@ -1,37 +1,16 @@
 name: hubleads
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: hubleads-postgres
-    restart: unless-stopped
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./pg-init:/docker-entrypoint-initdb.d:ro
-    environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: hubleads
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - hubleads-net
-
   pocketbase:
     image: ghcr.io/muchobien/pocketbase:latest
     container_name: hubleads-pocketbase
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     volumes:
       - pb-data:/pb_data
       - pb-public:/pb_public
       - ../pb_hooks:/pb_hooks:ro
     environment:
-      PB_ENCRYPTION_KEY: ${PB_ENCRYPTION_KEY}
+      PB_ENCRYPTION_KEY: ${PB_ENCRYPTION_KEY:-}
     command:
       - "--dir=/pb_data"
       - "--publicDir=/pb_public"
@@ -46,51 +25,13 @@ services:
     networks:
       - hubleads-net
 
-  evolution:
-    image: evoapicloud/evolution-api:v2.3.7
-    container_name: hubleads-evolution
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-    volumes:
-      - evolution-data:/evolution/instances
-    environment:
-      SERVER_URL: https://${DOMAIN}/evolution
-      DATABASE_ENABLED: "true"
-      DATABASE_PROVIDER: postgresql
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/evolution?sslmode=disable
-      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
-      AUTHENTICATION_EXPOSE_KEY_FILES: "true"
-      AUTHENTICATION_TYPE: apikey
-      AUTHENTICATION_DISABLE_FRONTEND: "false"
-      LOG_LEVEL: info
-      WEBHOOK_ENABLED: "false"
-      DEL_INSTANCE: "false"
-      RABBITMQ_ENABLED: "false"
-      SQS_ENABLED: "false"
-    ports:
-      - "127.0.0.1:8080:8080"
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    networks:
-      - hubleads-net
-
 networks:
   hubleads-net:
     name: hubleads-network
     driver: bridge
 
 volumes:
-  postgres-data:
-    name: hubleads-postgres-data
   pb-data:
     name: hubleads-pb-data
   pb-public:
     name: hubleads-pb-public
-  evolution-data:
-    name: hubleads-evolution-data
