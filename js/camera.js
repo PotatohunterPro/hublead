@@ -1,39 +1,56 @@
-const CAMERA = {
-  input: null,
-  preview: null,
-  currentBlob: null,
+// ============================================================
+//  HUB LEADS — Captura de fotos com compressão automática
+//  Suporta 2 espaços: frente do cartão/fachada + verso (opcional)
+// ============================================================
 
-  init(inputId, previewId) {
-    this.input = document.getElementById(inputId);
-    this.preview = document.getElementById(previewId);
-    if (!this.input || !this.preview) return;
-    this.input.addEventListener('change', (e) => this.handleFile(e));
-    const removeBtn = this.preview.querySelector('.photo-remove');
+const CAMERA = {
+  slots: [],       // [{ input, preview, blob, dataUrl }]
+  onCaptura: null, // callback(fotos) — fotos = [{ blob, dataUrl }] em ordem
+  maxFotos: 2,
+
+  init() {
+    this.slots = [];
+    this._setupSlot('fotoInput', 'photoPreview');           // frente / fachada
+    this._setupSlot('fotoInputVerso', 'photoPreviewVerso'); // verso (opcional)
+  },
+
+  _setupSlot(inputId, previewId) {
+    const input = document.getElementById(inputId);
+    const preview = document.getElementById(previewId);
+    if (!input || !preview) return;
+    const slot = { input, preview, blob: null, dataUrl: null };
+    this.slots.push(slot);
+    input.addEventListener('change', (e) => this.handleFile(e, slot));
+    const removeBtn = preview.querySelector('.photo-remove');
     if (removeBtn) {
       removeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.limpar();
+        this.limparSlot(slot);
+        if (this.onCaptura) this.onCaptura(this.getFotos());
       });
     }
-    this.preview.addEventListener('click', () => this.input.click());
+    preview.addEventListener('click', () => input.click());
   },
 
-  handleFile(e) {
+  handleFile(e, slot) {
     const file = e.target.files[0];
     if (!file) return;
     this.comprimir(file, (blob, dataUrl) => {
-      this.currentBlob = blob;
-      const img = this.preview.querySelector('img') || document.createElement('img');
+      slot.blob = blob;
+      slot.dataUrl = dataUrl;
+      const img = slot.preview.querySelector('img') || document.createElement('img');
       img.src = dataUrl;
-      img.alt = 'Foto da fachada';
-      if (!this.preview.contains(img)) {
-        this.preview.insertBefore(img, this.preview.querySelector('.photo-remove'));
+      img.alt = 'Foto do cartão';
+      if (!slot.preview.contains(img)) {
+        slot.preview.insertBefore(img, slot.preview.querySelector('.photo-remove'));
       }
-      this.preview.classList.add('has-image');
-      const span = this.preview.querySelector('span');
-      const svg = this.preview.querySelector('svg');
+      slot.preview.classList.add('has-image');
+      const span = slot.preview.querySelector('span');
+      const svg = slot.preview.querySelector('svg');
       if (svg) svg.style.display = 'none';
       if (span) span.style.display = 'none';
+      // Gatilho pós-captura (scanner de cartão de visita)
+      if (this.onCaptura) this.onCaptura(this.getFotos());
     });
   },
 
@@ -59,23 +76,35 @@ const CAMERA = {
     img.src = URL.createObjectURL(file);
   },
 
-  getBlob() {
-    return this.currentBlob;
+  // Fotos preenchidas, em ordem de slot (frente primeiro)
+  getFotos() {
+    return this.slots.filter((s) => s.blob).map((s) => ({ blob: s.blob, dataUrl: s.dataUrl }));
   },
 
-  limpar() {
-    this.currentBlob = null;
-    this.input.value = '';
-    const img = this.preview.querySelector('img');
+  // Foto principal (1ª disponível) — usada como "Foto da Fachada" do lead
+  getBlob() {
+    const primeira = this.slots.find((s) => s.blob);
+    return primeira ? primeira.blob : null;
+  },
+
+  temFoto() {
+    return this.slots.some((s) => s.blob);
+  },
+
+  limparSlot(slot) {
+    slot.blob = null;
+    slot.dataUrl = null;
+    slot.input.value = '';
+    const img = slot.preview.querySelector('img');
     if (img) img.remove();
-    this.preview.classList.remove('has-image');
-    const svg = this.preview.querySelector('svg');
-    const span = this.preview.querySelector('span');
+    slot.preview.classList.remove('has-image');
+    const svg = slot.preview.querySelector('svg');
+    const span = slot.preview.querySelector('span');
     if (svg) svg.style.display = '';
     if (span) span.style.display = '';
   },
 
-  temFoto() {
-    return this.currentBlob !== null;
+  limpar() {
+    this.slots.forEach((s) => this.limparSlot(s));
   }
 };

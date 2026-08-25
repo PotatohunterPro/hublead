@@ -786,6 +786,24 @@ img { max-width: 100%; height: auto; display: block; }
 /* === CAMERA BADGE === */
 .required-asterisk { color: var(--color-danger); }
 
+/* === OCR CARTÃO (scanner IA) === */
+.photo-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.photo-grid .photo-upload { height: 150px; margin-bottom: 0; }
+.ocr-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-hairline);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
 /* === RESPONSIVE === */
 @media (min-width: 768px) {
   .tab-scroll { padding: var(--space-6); }

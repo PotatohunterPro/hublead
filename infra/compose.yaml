@@ -9,6 +9,10 @@ services:
       - pb-data:/pb_data
       - pb-public:/pb_public
       - ../pb_hooks:/pb_hooks:ro
+    # Permite o hook de OCR alcançar o Ollama rodando no host
+    # (pb_hooks/ocr.pb.js usa http://host.docker.internal:11434 como fallback)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       PB_ENCRYPTION_KEY: ${PB_ENCRYPTION_KEY:-}
     command:

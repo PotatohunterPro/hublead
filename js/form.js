@@ -9,6 +9,8 @@ const FORM = {
   btnBuscarCnpj: null,
   btnToggleDetalhes: null,
   _cachedCoords: null,
+  _ocrEmAndamento: false,
+  _ocrTimer: null,
 
   init(formId, btnId) {
     this.form = document.getElementById(formId);
@@ -45,6 +47,9 @@ const FORM = {
     if (this.btnBuscarCnpj) {
       this.btnBuscarCnpj.addEventListener('click', () => this.buscarCnpj());
     }
+
+    // Scanner de cartão de visita: dispara a análise IA ao capturar/trocar as fotos
+    CAMERA.onCaptura = (fotos) => this.analisarCartao(fotos);
 
     this.form.addEventListener('submit', (e) => this.submit(e));
   },
@@ -108,6 +113,130 @@ const FORM = {
 
     btn.disabled = false;
     btn.innerHTML = txtOriginal;
+  },
+
+  // ===== Scanner de Cartão de Visita (OCR IA via backend/Ollama) =====
+  // Recebe as fotos do CAMERA (frente + verso opcional). Após a 1ª foto,
+  // abre uma janela de 4s para o usuário adicionar o verso; com as 2
+  // fotos (ou no fim da janela), envia tudo para uma única análise.
+  analisarCartao(fotos) {
+    fotos = Array.isArray(fotos) ? fotos : [];
+    if (this._ocrEmAndamento) return; // bloqueia análises duplicadas
+    if (!navigator.onLine) return; // sem backend não há análise
+    clearTimeout(this._ocrTimer);
+
+    if (fotos.length === 0) {
+      this.setOcrStatus(false);
+      return;
+    }
+
+    if (fotos.length < CAMERA.maxFotos) {
+      // Janela de espera para adicionar o verso antes de disparar
+      this.setOcrStatus(true, 'Analisando em instantes — adicione o verso (opcional)');
+      this._ocrTimer = setTimeout(() => this.executarAnalise(), 4000);
+      return;
+    }
+
+    this.executarAnalise();
+  },
+
+  async executarAnalise() {
+    const fotos = CAMERA.getFotos();
+    if (!fotos.length) {
+      this.setOcrStatus(false);
+      return;
+    }
+    this._ocrEmAndamento = true;
+    this.setOcrStatus(true, 'Analisando cartão com IA...');
+    if (this.btnSubmit) this.btnSubmit.disabled = true;
+
+    try {
+      const res = await API.extrairDadosCartao(fotos.map((f) => f.dataUrl));
+      const dados = res && (res.data || res.dados);
+      if (res && res.success && dados) {
+        const n = this.preencherComCartao(dados);
+        if (n > 0) App.toast('Cartão analisado — ' + n + ' campo(s) preenchido(s)', 'success');
+        else App.toast('Nenhum dado legível no cartão — preencha manualmente', 'warning');
+      } else {
+        App.toast((res && res.error) || 'Não foi possível ler o cartão — preencha manualmente', 'warning');
+      }
+    } catch (err) {
+      console.error('OCR do cartão falhou:', err);
+      App.toast('Falha ao analisar o cartão — preencha manualmente', 'warning');
+    }
+
+    this.setOcrStatus(false);
+    if (this.btnSubmit) this.btnSubmit.disabled = false;
+    this._ocrEmAndamento = false;
+  },
+
+  // Preenche o formulário com os dados extraídos do cartão.
+  // Só preenche campos vazios — nunca sobrescreve o que o hunter digitou.
+  preencherComCartao(dados) {
+    let n = 0;
+    const preencher = (id, valor) => {
+      const el = document.getElementById(id);
+      if (!el || !valor) return;
+      if (el.value.trim()) return;
+      el.value = valor;
+      n++;
+    };
+
+    preencher('inputEmpresa', dados.nome_empresa);
+    preencher('inputNomeContato', dados.nome_contato);
+    preencher('inputTelLoja', dados.telefone);
+    const zap = dados.whatsapp || dados.telefone;
+    if (zap) preencher('inputZap', this.formatarFone(zap));
+    preencher('inputEmail', dados.email);
+    preencher('inputCidadeBairro', [dados.endereco, dados.cidade].filter(Boolean).join(' - '));
+    this.preencherSegmento(dados.ramo_atividade);
+
+    // Site e redes sociais não têm campo próprio → vão para as anotações
+    const extras = [
+      dados.site ? 'Site: ' + dados.site : '',
+      dados.redes_sociais ? 'Redes: ' + dados.redes_sociais : ''
+    ].filter(Boolean).join(' | ');
+    if (extras) {
+      const anot = document.getElementById('textareaFaltas');
+      if (anot && !anot.value.trim()) {
+        anot.value = extras;
+        n++;
+      }
+    }
+    return n;
+  },
+
+  // Tenta encaixar o ramo do cartão nas opções existentes do select
+  preencherSegmento(ramo) {
+    if (!ramo) return;
+    const sel = document.getElementById('selectSegmento');
+    if (!sel || sel.value) return;
+    const alvo = String(ramo).toLowerCase().trim();
+    const opcao = Array.from(sel.options).find((o) => {
+      if (!o.value || o.value === 'Outro') return false;
+      const partes = o.value.toLowerCase().split('/').map((p) => p.trim());
+      return partes.some((p) => p && (alvo.includes(p) || p.includes(alvo)));
+    });
+    if (opcao) sel.value = opcao.value;
+  },
+
+  // Máscara BR — mesma regra do inputZap em index.html
+  formatarFone(v) {
+    const d = String(v).replace(/\D/g, '');
+    if (d.length <= 2) return d;
+    if (d.length <= 6) return '(' + d.slice(0, 2) + ') ' + d.slice(2);
+    if (d.length <= 10) return '(' + d.slice(0, 2) + ') ' + d.slice(2, 6) + '-' + d.slice(6);
+    return '(' + d.slice(0, 2) + ') ' + d.slice(2, 7) + '-' + d.slice(7, 11);
+  },
+
+  setOcrStatus(ativo, texto) {
+    const el = document.getElementById('ocrStatus');
+    if (!el) return;
+    if (texto) {
+      const txt = el.querySelector('span:last-child');
+      if (txt) txt.textContent = texto;
+    }
+    el.style.display = ativo ? 'flex' : 'none';
   },
 
   getSelected(field) {

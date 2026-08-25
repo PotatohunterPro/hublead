@@ -14,7 +14,7 @@ const App = {
     this.initOfflineBar();
     this.initOnlineListener();
 
-    CAMERA.init('fotoInput', 'photoPreview');
+    CAMERA.init();
     FORM.init('leadForm', 'btnSalvarLead');
     MAPA.init('mapContainer');
 

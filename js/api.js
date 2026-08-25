@@ -211,6 +211,27 @@ const API = {
     throw new Error('Não foi possível buscar os dados do CNPJ online');
   },
 
+  // Scanner de cartão de visita: OCR via IA no backend (hook /api/extract-card → Ollama).
+  // Aceita múltiplas imagens (frente/verso) — consolidadas numa única leitura.
+  // Nenhuma URL/credencial do Ollama fica exposta — tudo roda no servidor.
+  async extrairDadosCartao(imagesArray) {
+    const images = (Array.isArray(imagesArray) ? imagesArray : [imagesArray])
+      .map((img) => String(img || '').replace(/^data:image\/\w+;base64,/, ''))
+      .filter(Boolean);
+
+    const response = await fetch('/api/extract-card', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ images })
+    });
+
+    if (!response.ok) {
+      throw new Error('Falha ao processar as imagens do cartão.');
+    }
+
+    return await response.json();
+  },
+
   // Processa a fila offline reenviando ou sincronizando
   async processarFila() {
     const fila = await dbGetFila();
