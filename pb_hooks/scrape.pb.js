@@ -1,15 +1,15 @@
 // ============================================================
-//  HUB LEADS — Custom PocketBase Hooks
+//  HUB LEADS — Custom PocketBase Hooks (API v0.23+)
 //  Scraping sob demanda + BrasilAPI + Geocoding Nominatim
 //
 //  Endpoints:
-//    POST   /api/scrape/url           → extrai CNPJ e adiciona lead via BrasilAPI + Geocode
-//    GET    /api/scrape/cnpj/:cnpj    → consulta direta CNPJ na BrasilAPI (usado no form)
-//    POST   /api/scrape/batch         → adiciona múltiplos CNPJs de uma vez
-//    GET    /api/scrape/leads         → lista leads do mapa (com filtros)
-//    PATCH  /api/scrape/leads/:id     → atualiza status/coords/dados de um lead
-//    DELETE /api/scrape/leads/:id     → exclui um lead
-//    GET    /api/scrape/geocode       → geocoding de um endereço (Nominatim)
+//    POST   /api/scrape/url              → extrai CNPJ e adiciona lead via BrasilAPI + Geocode
+//    GET    /api/scrape/cnpj/{cnpj}      → consulta direta CNPJ na BrasilAPI (usado no form)
+//    POST   /api/scrape/batch            → adiciona múltiplos CNPJs de uma vez
+//    GET    /api/scrape/leads            → lista leads do mapa (com filtros)
+//    PATCH  /api/scrape/leads/{id}       → atualiza status/coords/dados de um lead
+//    DELETE /api/scrape/leads/{id}       → exclui um lead
+//    GET    /api/scrape/geocode          → geocoding de um endereço (Nominatim)
 // ============================================================
 
 const GEO_USER_AGENT = 'HubLeads/2.0 (contato@hubsolucao.com.br)';
@@ -27,24 +27,33 @@ function cleanText(str) {
   return (str || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function getRequestBody(c) {
+// Leitura robusta do body (API v0.23+: e.requestInfo().body)
+function getRequestBody(e) {
   try {
-    if (typeof c.bind === 'function') {
-      const data = {};
-      c.bind(data);
-      if (Object.keys(data).length > 0) return data;
+    const info = e.requestInfo();
+    if (info && info.body) {
+      if (typeof info.body === 'string') return JSON.parse(info.body);
+      return info.body;
     }
-  } catch (e) {}
-  try {
-    const info = $apis.requestInfo(c);
     if (info && info.data) return info.data;
-  } catch (e) {}
-  try {
-    const req = c.requestInfo ? c.requestInfo() : null;
-    if (req && req.body) return typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    if (req && req.data) return req.data;
-  } catch (e) {}
+  } catch (err) {}
   return {};
+}
+
+function limparOut(record) {
+  const out = record.export();
+  delete out['@collectionId'];
+  delete out['@collectionName'];
+  return out;
+}
+
+// Busca lead por CNPJ (substituto de findRecordsByExpr, sem binding em JS)
+function findLeadPorCnpj(cnpj) {
+  try {
+    return $app.findFirstRecordByFilter('leads', 'cnpj = {:cnpj}', { cnpj });
+  } catch (e) {
+    return null;
+  }
 }
 
 // ---------- helpers de segurança ----------
@@ -147,37 +156,37 @@ async function geocodeAddress(endereco, cidade, cep) {
 }
 
 // ============================================================
-//  GET /api/scrape/cnpj/:cnpj  (Consulta rápida no form)
+//  GET /api/scrape/cnpj/{cnpj}  (Consulta rápida no form)
 // ============================================================
-routerAdd('GET', '/api/scrape/cnpj/:cnpj', async (c) => {
-  const cnpjParam = c.pathParam('cnpj');
+routerAdd('GET', '/api/scrape/cnpj/{cnpj}', async (e) => {
+  const cnpjParam = e.request.pathValue('cnpj');
   const clean = (cnpjParam || '').replace(/\D/g, '');
   if (clean.length !== 14) {
-    return c.json(400, { error: 'CNPJ inválido. Forneça 14 dígitos.' });
+    return e.json(400, { error: 'CNPJ inválido. Forneça 14 dígitos.' });
   }
 
   const dados = await fetchBrasilApiCnpj(clean);
   if (!dados) {
-    return c.json(404, { error: 'CNPJ não encontrado na base da Receita Federal.' });
+    return e.json(404, { error: 'CNPJ não encontrado na base da Receita Federal.' });
   }
 
   const coords = await geocodeAddress(dados.endereco, dados.cidade, dados.cep);
   dados.coords = coords;
 
-  return c.json(200, { success: true, lead: dados });
+  return e.json(200, { success: true, lead: dados });
 });
 
 // ============================================================
 //  POST /api/scrape/url  (Suporta URL ou CNPJ avulso)
 // ============================================================
-routerAdd('POST', '/api/scrape/url', async (c) => {
-  const body = getRequestBody(c);
+routerAdd('POST', '/api/scrape/url', async (e) => {
+  const body = getRequestBody(e);
   const input = body.url || body.cnpj || body.input || '';
   const hunterId = body.hunterId || '';
 
   const cnpjs = extractCnpjs(input);
   if (cnpjs.length === 0) {
-    return c.json(400, {
+    return e.json(400, {
       error: 'Nenhum CNPJ válido encontrado. Cole o link da Casa dos Dados ou digite o CNPJ.'
     });
   }
@@ -186,23 +195,15 @@ routerAdd('POST', '/api/scrape/url', async (c) => {
 
   try {
     // 1. Verificar se o CNPJ já existe no PocketBase
-    let existente = null;
-    try {
-      const records = $app.dao().findRecordsByExpr('leads', $dbx.exp('cnpj = {:cnpj}', { cnpj }));
-      if (records && records.length > 0) existente = records[0];
-    } catch (e) {}
-
+    const existente = findLeadPorCnpj(cnpj);
     if (existente) {
-      const out = existente.export();
-      delete out['@collectionId'];
-      delete out['@collectionName'];
-      return c.json(200, { success: true, lead: out, duplicado: true });
+      return e.json(200, { success: true, lead: limparOut(existente), duplicado: true });
     }
 
     // 2. Buscar dados oficiais na BrasilAPI
     const dados = await fetchBrasilApiCnpj(cnpj);
     if (!dados) {
-      return c.json(404, {
+      return e.json(404, {
         error: `Não foi possível localizar os dados do CNPJ ${cnpj} na Receita Federal.`
       });
     }
@@ -211,7 +212,7 @@ routerAdd('POST', '/api/scrape/url', async (c) => {
     const coords = await geocodeAddress(dados.endereco, dados.cidade, dados.cep);
 
     // 4. Salvar lead no banco
-    const col = $app.dao().findCollectionByNameOrId('leads');
+    const col = $app.findCollectionByNameOrId('leads');
     const lead = new Record(col, {
       cnpj: dados.cnpj,
       empresa: dados.empresa,
@@ -230,41 +231,39 @@ routerAdd('POST', '/api/scrape/url', async (c) => {
       dataAdicionado: new Date().toISOString()
     });
 
-    $app.dao().saveRecord(lead);
+    $app.save(lead);
     $app.logger().info('Lead adicionado', { cnpj: dados.cnpj, empresa: dados.empresa });
 
-    const out = lead.export();
-    delete out['@collectionId'];
-    delete out['@collectionName'];
-    return c.json(200, { success: true, lead: out });
+    return e.json(200, { success: true, lead: limparOut(lead) });
   } catch (error) {
     $app.logger().error('Falha ao adicionar lead', { error: error.message, input });
-    return c.json(500, { error: 'Falha ao processar lead: ' + error.message });
+    return e.json(500, { error: 'Falha ao processar lead: ' + error.message });
   }
 });
 
 // ============================================================
 //  POST /api/scrape/batch (Adiciona múltiplos CNPJs em lote)
 // ============================================================
-routerAdd('POST', '/api/scrape/batch', async (c) => {
-  const body = getRequestBody(c);
+routerAdd('POST', '/api/scrape/batch', async (e) => {
+  const body = getRequestBody(e);
   const text = body.text || body.cnpjs || '';
   const hunterId = body.hunterId || '';
 
   const cnpjs = extractCnpjs(text);
   if (cnpjs.length === 0) {
-    return c.json(400, { error: 'Nenhum CNPJ válido encontrado no texto.' });
+    return e.json(400, { error: 'Nenhum CNPJ válido encontrado no texto.' });
   }
 
   const resultados = [];
-  const col = $app.dao().findCollectionByNameOrId('leads');
+  const col = $app.findCollectionByNameOrId('leads');
+  const lote = cnpjs.slice(0, 5); // limite de 5 por lote p/ evitar timeout 504 e respeitar rate-limit Nominatim
 
-  for (const cnpj of cnpjs.slice(0, 5)) { // limite de 5 por lote p/ evitar timeout 504 e respeitar rate-limit Nominatim
+  for (const cnpj of lote) {
     try {
       // Verifica se já existe
-      const existente = $app.dao().findRecordsByExpr('leads', $dbx.exp('cnpj = {:cnpj}', { cnpj }))[0];
+      const existente = findLeadPorCnpj(cnpj);
       if (existente) {
-        resultados.push({ cnpj, status: 'duplicado', lead: existente.export() });
+        resultados.push({ cnpj, status: 'duplicado', lead: limparOut(existente) });
         continue;
       }
 
@@ -291,29 +290,29 @@ routerAdd('POST', '/api/scrape/batch', async (c) => {
         dataAdicionado: new Date().toISOString()
       });
 
-      $app.dao().saveRecord(lead);
-      resultados.push({ cnpj, status: 'adicionado', lead: lead.export() });
+      $app.save(lead);
+      resultados.push({ cnpj, status: 'adicionado', lead: limparOut(lead) });
       // respeita rate-limit Nominatim 1 req/s
-      if (cnpj !== cnpjs.slice(0, 5).slice(-1)[0]) {
+      if (cnpj !== lote[lote.length - 1]) {
         await new Promise(r => setTimeout(r, 1100));
       }
-    } catch (e) {
-      resultados.push({ cnpj, status: 'erro', error: e.message });
+    } catch (err) {
+      resultados.push({ cnpj, status: 'erro', error: err.message });
     }
   }
 
-  return c.json(200, { success: true, total: cnpjs.length, resultados });
+  return e.json(200, { success: true, total: cnpjs.length, resultados });
 });
 
 // ============================================================
-//  GET /api/scrape/leads?status=pendente&limit=500&page=1
+//  GET /api/scrape/leads?status=pendente&limit=100&page=1
 // ============================================================
-routerAdd('GET', '/api/scrape/leads', (c) => {
-  const status = c.queryParam('status') || '';
-  const limit = clampInt(c.queryParam('limit'), 50, 1, 100);
-  const page = clampInt(c.queryParam('page'), 1, 1, 1000);
+routerAdd('GET', '/api/scrape/leads', (e) => {
+  const status = e.request.url.query().get('status') || '';
+  const limit = clampInt(e.request.url.query().get('limit'), 50, 1, 100);
+  const page = clampInt(e.request.url.query().get('page'), 1, 1, 1000);
 
-  let query = $app.dao().findRecordsByFilter(
+  const query = $app.findRecordsByFilter(
     'leads',
     status ? `status = {:status}` : '',
     '-dataAdicionado',
@@ -322,29 +321,24 @@ routerAdd('GET', '/api/scrape/leads', (c) => {
     status ? { status } : {}
   );
 
-  return c.json(200, query.map((l) => {
-    const out = l.export();
-    delete out['@collectionId'];
-    delete out['@collectionName'];
-    return out;
-  }));
+  return e.json(200, query.map(limparOut));
 });
 
 // ============================================================
-//  PATCH /api/scrape/leads/:id
+//  PATCH /api/scrape/leads/{id}
 // ============================================================
-routerAdd('PATCH', '/api/scrape/leads/:id', (c) => {
-  const id = c.pathParam('id');
-  const body = getRequestBody(c);
+routerAdd('PATCH', '/api/scrape/leads/{id}', (e) => {
+  const id = e.request.pathValue('id');
+  const body = getRequestBody(e);
   let lead;
   try {
-    lead = $app.dao().findRecordById('leads', id);
-  } catch (e) {
-    return c.json(404, { error: 'Lead não encontrado' });
+    lead = $app.findRecordById('leads', id);
+  } catch (err) {
+    return e.json(404, { error: 'Lead não encontrado' });
   }
 
   if (!lead) {
-    return c.json(404, { error: 'Lead não encontrado' });
+    return e.json(404, { error: 'Lead não encontrado' });
   }
 
   const allowed = ['pendente', 'visitado', 'convertido', 'descartado'];
@@ -358,37 +352,37 @@ routerAdd('PATCH', '/api/scrape/leads/:id', (c) => {
   if (body.segmento !== undefined) lead.set('segmento', body.segmento);
   if (body.email !== undefined) lead.set('email', body.email);
 
-  $app.dao().saveRecord(lead);
-  return c.json(200, { success: true, lead: lead.export() });
+  $app.save(lead);
+  return e.json(200, { success: true, lead: limparOut(lead) });
 });
 
 // ============================================================
-//  DELETE /api/scrape/leads/:id
+//  DELETE /api/scrape/leads/{id}
 // ============================================================
-routerAdd('DELETE', '/api/scrape/leads/:id', (c) => {
-  const id = c.pathParam('id');
+routerAdd('DELETE', '/api/scrape/leads/{id}', (e) => {
+  const id = e.request.pathValue('id');
   let lead;
   try {
-    lead = $app.dao().findRecordById('leads', id);
-  } catch (e) {
-    return c.json(404, { error: 'Lead não encontrado' });
+    lead = $app.findRecordById('leads', id);
+  } catch (err) {
+    return e.json(404, { error: 'Lead não encontrado' });
   }
 
   if (!lead) {
-    return c.json(404, { error: 'Lead não encontrado' });
+    return e.json(404, { error: 'Lead não encontrado' });
   }
 
-  $app.dao().deleteRecord(lead);
+  $app.delete(lead);
   $app.logger().info('Lead excluído', { id });
-  return c.json(200, { success: true });
+  return e.json(200, { success: true });
 });
 
 // ============================================================
 //  GET /api/scrape/geocode?endereco=...
 // ============================================================
-routerAdd('GET', '/api/scrape/geocode', async (c) => {
-  const endereco = c.queryParam('endereco') || '';
-  if (!endereco) return c.json(400, { error: 'Parâmetro endereco obrigatório' });
+routerAdd('GET', '/api/scrape/geocode', async (e) => {
+  const endereco = e.request.url.query().get('endereco') || '';
+  if (!endereco) return e.json(400, { error: 'Parâmetro endereco obrigatório' });
   const coords = await geocodeAddress(endereco);
-  return c.json(200, { success: true, coords });
+  return e.json(200, { success: true, coords });
 });
