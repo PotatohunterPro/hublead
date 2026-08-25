@@ -182,7 +182,7 @@ const SUGERIDOS = {
             ${l.status === 'pendente' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:#ff9f0a" onclick="SUGERIDOS.alterarStatus(${l.id}, 'visitado')">Visitei</button>` : ''}
             ${l.status !== 'convertido' && l.status !== 'descartado' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:#34c759" onclick="SUGERIDOS.alterarStatus(${l.id}, 'convertido')">Convertido</button>` : ''}
             ${l.status !== 'descartado' ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:#8e8e93" onclick="SUGERIDOS.alterarStatus(${l.id}, 'descartado')">Descartar</button>` : ''}
-            ${(l.lat && l.lng) ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="SUGERIDOS.navegarAte(${l.lat}, ${l.lng})">Navegar</button>` : ''}
+            ${(l.lat != null && l.lng != null) ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" onclick="SUGERIDOS.navegarAte(${Number(l.lat)}, ${Number(l.lng)})">Navegar</button>` : ''}
             <button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;color:#25D366" onclick="SUGERIDOS.enviarWhatsApp(${l.id})">WhatsApp</button>
           </div>
         </div>
@@ -251,6 +251,10 @@ const SUGERIDOS = {
   },
 
   navegarAte(lat, lng) {
+    if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) {
+      App.toast('Localização indisponível para este lead', 'warning');
+      return;
+    }
     window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`, '_blank');
   },
 

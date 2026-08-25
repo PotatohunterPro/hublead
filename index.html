@@ -13,7 +13,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="anonymous">
 <link rel="stylesheet" href="css/design-tokens.css">
 <link rel="stylesheet" href="css/globals.css">
 <style>
@@ -39,6 +39,7 @@
 <div id="splash" class="splash">
   <img src="assets/logo.jpg" alt="Hub Leads" style="max-height:100px;border-radius:var(--radius-md);">
   <div class="splash-loader"></div>
+  <div id="splashVersion" style="margin-top:8px;font-size:11px;color:var(--color-text-tertiary)"></div>
 </div>
 
 <div id="offlineBar" class="offline-bar">Você está offline — leads salvos localmente</div>
@@ -53,6 +54,7 @@
     </picture>
   </div>
   <div class="header-actions">
+    <span id="appVersion" style="font-size:10px;color:var(--color-text-tertiary);margin-right:4px;white-space:nowrap"></span>
     <span id="headerBadge" class="header-badge"></span>
     <button id="btnConfigurar" class="header-btn" aria-label="Configurar">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -323,7 +325,7 @@
 
         <button type="submit" id="btnSalvarLead" class="btn btn-primary btn-block btn-lg" style="background:#25D366;border-color:#25D366;color:#fff">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2z"/></svg>
-          Salvar & Enviar no WhatsApp
+          Salvar Lead
         </button>
         <div style="height:var(--space-4)"></div>
       </form>
@@ -381,8 +383,8 @@
   <section id="tabFila" class="tab-content">
     <div class="tab-scroll">
       <div class="filtro-row">
-        <button class="filtro-btn active" data-filtro="fila">Fila de Envio</button>
-        <button class="filtro-btn" data-filtro="historico">Histórico de Envios</button>
+        <button class="filtro-btn active" data-filtro="fila" aria-pressed="true">Fila de Envio</button>
+        <button class="filtro-btn" data-filtro="historico" aria-pressed="false">Histórico de Envios</button>
       </div>
       <div id="filaContainer">
         <div id="emptyFila" class="empty-state">
@@ -431,12 +433,13 @@
       <button id="btnFecharConfig" class="btn btn-secondary" style="flex:1">Cancelar</button>
       <button id="btnSalvarConfig" class="btn btn-primary" style="flex:2">Salvar</button>
     </div>
+    <div id="configVersion" style="margin-top:12px;font-size:11px;color:var(--color-text-tertiary);text-align:center"></div>
   </div>
 </div>
 
-<script src="https://unpkg.com/dexie@3.2.4/dist/dexie.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script src="https://unpkg.com/dexie@3.2.4/dist/dexie.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js" crossorigin="anonymous"></script>
 <script src="js/util.js"></script>
 <script src="js/db.js"></script>
 <script src="js/api.js"></script>
@@ -444,6 +447,7 @@
 <script src="js/form.js"></script>
 <script src="js/map.js"></script>
 <script src="js/sugeridos.js"></script>
+<script src="js/version.js"></script>
 <script src="js/app.js"></script>
 <script>
 if ('serviceWorker' in navigator) {
@@ -484,8 +488,12 @@ if (inputCnpj) {
 // Filtros da Fila/Histórico
 document.querySelectorAll('.filtro-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.filtro-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.filtro-btn').forEach(b => {
+      b.classList.remove('active');
+      b.setAttribute('aria-pressed', 'false');
+    });
     btn.classList.add('active');
+    btn.setAttribute('aria-pressed', 'true');
     const filtro = btn.dataset.filtro;
     document.getElementById('filaContainer').style.display = filtro === 'fila' ? 'block' : 'none';
     document.getElementById('historicoContainer').style.display = filtro === 'historico' ? 'block' : 'none';

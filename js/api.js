@@ -49,7 +49,8 @@ const API = {
     linhas.push(titulo);
 
     if (d.cnpj) {
-      const cnpjFmt = d.cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+      const c = String(d.cnpj).replace(/\D/g, '');
+      const cnpjFmt = c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
       linhas.push(`📄 CNPJ: ${cnpjFmt}`);
     }
 
@@ -119,8 +120,12 @@ const API = {
     const lead = String((dados && dados.zapContato) || '').replace(/\D/g, '');
     let destino = fixo || hunter || lead;
 
-    if (destino && !destino.startsWith('55') && destino.length >= 10 && destino.length <= 11) {
+    if (destino && destino.length >= 10 && destino.length <= 11 && !destino.startsWith('55')) {
       destino = '55' + destino;
+    } else if (destino && destino.length === 12 && destino.startsWith('55')) {
+      // já com DDI, mantém
+    } else if (destino && destino.length === 13 && destino.startsWith('55')) {
+      // ex: 55 + 11 dígitos (celular com 9), mantém
     }
     return destino;
   },
@@ -216,7 +221,7 @@ const API = {
   // Nenhuma URL/credencial do Ollama fica exposta — tudo roda no servidor.
   async extrairDadosCartao(imagesArray) {
     const images = (Array.isArray(imagesArray) ? imagesArray : [imagesArray])
-      .map((img) => String(img || '').replace(/^data:image\/\w+;base64,/, ''))
+      .map((img) => String(img || '').replace(/^data:image\/[\w\+]+;base64,/, ''))
       .filter(Boolean);
 
     const response = await fetch('/api/extract-card', {
@@ -226,7 +231,14 @@ const API = {
     });
 
     if (!response.ok) {
-      throw new Error('Falha ao processar as imagens do cartão.');
+      let detalhe = '';
+      try {
+        const err = await response.json();
+        detalhe = err.error || err.message || '';
+      } catch (e) {
+        try { detalhe = await response.text(); } catch (e2) {}
+      }
+      throw new Error(detalhe ? `Falha IA: ${detalhe} (${response.status})` : `Falha ao processar as imagens do cartão (${response.status})`);
     }
 
     return await response.json();

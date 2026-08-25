@@ -34,7 +34,21 @@ const CAMERA = {
   handleFile(e, slot) {
     const file = e.target.files[0];
     if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      if (typeof App !== 'undefined') App.toast('Selecione apenas imagens (JPG/PNG)', 'warning');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      if (typeof App !== 'undefined') App.toast('Imagem muito grande (máx. 15MB)', 'warning');
+      e.target.value = '';
+      return;
+    }
     this.comprimir(file, (blob, dataUrl) => {
+      if (!blob) {
+        if (typeof App !== 'undefined') App.toast('Falha ao processar imagem', 'error');
+        return;
+      }
       slot.blob = blob;
       slot.dataUrl = dataUrl;
       const img = slot.preview.querySelector('img') || document.createElement('img');
@@ -53,22 +67,33 @@ const CAMERA = {
 
   comprimir(file, callback) {
     const MAX_WIDTH = 1280;
+    const MAX_HEIGHT = 1280;
     const QUALIDADE = 0.8;
     const img = new Image();
     img.onload = () => {
+      URL.revokeObjectURL(img.src);
       const canvas = document.createElement('canvas');
       let { width, height } = img;
-      if (width > MAX_WIDTH) {
-        height = Math.round(height * MAX_WIDTH / width);
-        width = MAX_WIDTH;
+      if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+        const ratio = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
       }
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, width, height);
       canvas.toBlob((blob) => {
+        if (!blob) {
+          if (typeof App !== 'undefined') App.toast('Falha ao comprimir imagem', 'error');
+          return;
+        }
         callback(blob, canvas.toDataURL('image/jpeg', QUALIDADE));
       }, 'image/jpeg', QUALIDADE);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(img.src);
+      if (typeof App !== 'undefined') App.toast('Arquivo de imagem inválido', 'error');
     };
     img.src = URL.createObjectURL(file);
   },

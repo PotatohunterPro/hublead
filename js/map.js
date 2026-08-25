@@ -110,7 +110,7 @@ const MAPA = {
           ${lead.status === 'pendente' ? `<button onclick="MAPA.alterarStatus(${lead.id}, 'visitado')" style="${btnBase};background:#ff9f0a;color:#fff">Visitei</button>` : ''}
           ${lead.status !== 'convertido' && lead.status !== 'descartado' ? `<button onclick="MAPA.alterarStatus(${lead.id}, 'convertido')" style="${btnBase};background:#34c759;color:#fff">Convertido</button>` : ''}
           ${lead.status !== 'descartado' ? `<button onclick="MAPA.alterarStatus(${lead.id}, 'descartado')" style="${btnBase};background:#8e8e93;color:#fff">Descartar</button>` : ''}
-          ${(lat && lng) ? `<button onclick="MAPA.navegarAte(${lat}, ${lng})" style="${btnBase};background:#f2f2f7;color:#1d1d1f">📍 Navegar (Google Maps)</button>` : ''}
+           ${(lat != null && lng != null) ? `<button onclick="MAPA.navegarAte(${Number(lat)}, ${Number(lng)})" style="${btnBase};background:#f2f2f7;color:#1d1d1f">📍 Navegar (Google Maps)</button>` : ''}
           <button onclick="MAPA.enviarWhatsApp(${lead.id})" style="${btnBase};background:#25D366;color:#fff">💬 WhatsApp</button>
         </div>
       </div>
@@ -132,9 +132,14 @@ const MAPA = {
   },
 
   navegarAte(lat, lng) {
+    if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) {
+      App.toast('Localização indisponível para este lead', 'warning');
+      return;
+    }
     window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`, '_blank');
   },
 
+  _posicaoMarker: null,
   irParaLocalizacao() {
     if (!navigator.geolocation) {
       App.toast('Geolocalização não disponível', 'warning');
@@ -143,7 +148,8 @@ const MAPA = {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         this.map.setView([pos.coords.latitude, pos.coords.longitude], 16);
-        L.circleMarker([pos.coords.latitude, pos.coords.longitude], {
+        if (this._posicaoMarker) this.map.removeLayer(this._posicaoMarker);
+        this._posicaoMarker = L.circleMarker([pos.coords.latitude, pos.coords.longitude], {
           radius: 8, fillColor: '#007AFF', color: '#fff', weight: 3, opacity: 1, fillOpacity: 0.9
         }).addTo(this.map).bindPopup('Você está aqui').openPopup();
       },

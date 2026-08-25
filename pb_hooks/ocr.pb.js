@@ -20,9 +20,9 @@ const OLLAMA_URLS = [
   'http://127.0.0.1:11434',
   'http://host.docker.internal:11434'
 ];
-const OLLAMA_TIMEOUT = 45; // segundos
-const MAX_IMAGENS = 4;
-const MAX_BASE64_LEN = 14000000; // ~10MB por imagem
+const OLLAMA_TIMEOUT = 20; // segundos por tentativa (total max 40s < proxy 60s)
+const MAX_IMAGENS = 2;
+const MAX_BASE64_LEN = 4000000; // ~3MB por imagem (evita OOM 56MB)
 
 const CHAVES_CARTAO = [
   'nome_empresa', 'nome_contato', 'telefone', 'whatsapp', 'email',
@@ -62,7 +62,7 @@ function limparImagens(data) {
     raw = [data.image];
   }
   return raw
-    .map((img) => String(img || '').replace(/^data:image\/\w+;base64,/, '').replace(/\s+/g, ''))
+    .map((img) => String(img || '').replace(/^data:image\/[\w\+]+;base64,/, '').replace(/\s+/g, ''))
     .filter((img) => img.length > 0)
     .slice(0, MAX_IMAGENS);
 }

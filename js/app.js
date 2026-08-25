@@ -193,8 +193,9 @@ const App = {
       }
     } catch (e) {
       console.warn('Processamento de análises falhou:', e);
+    } finally {
+      this._iaEmLote = false;
     }
-    this._iaEmLote = false;
     this.carregarFila();
     this.atualizarBadge();
   },
@@ -278,8 +279,10 @@ const App = {
         } catch (e) {}
       }
     } catch (e) {
-      // offline → segue 'analisando' (retry automático); erro real → 'erro'
-      lead.iaStatus = (e && e.message === 'offline') ? 'analisando' : 'erro';
+      // offline/rede → segue 'analisando' (retry automático); erro real → 'erro'
+      const msg = String(e && e.message || e || '').toLowerCase();
+      const ehRede = msg.includes('offline') || msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('load failed') || e.name === 'AbortError';
+      lead.iaStatus = ehRede ? 'analisando' : 'erro';
       await db.leads.put(lead);
     }
     return lead;
@@ -561,9 +564,10 @@ const App = {
       if (lead) return lead;
     }
     const todos = await db.leads.toArray();
+    const norm = (s) => String(s || '').trim().toLowerCase();
     return todos.find((l) =>
-      (l.empresa || '') === (item.empresa || '') &&
-      (!item.zapContato || (l.zapContato || '') === item.zapContato)
+      norm(l.empresa) === norm(item.empresa) &&
+      (!item.zapContato || norm(l.zapContato) === norm(item.zapContato))
     ) || null;
   },
 

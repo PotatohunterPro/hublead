@@ -47,6 +47,17 @@ function getRequestBody(c) {
   return {};
 }
 
+// ---------- helpers de segurança ----------
+function clampInt(v, def, min, max) {
+  const n = parseInt(v, 10);
+  if (isNaN(n)) return def;
+  return Math.min(Math.max(n, min), max);
+}
+function validarCoords(coords) {
+  if (!coords || typeof coords.lat !== 'number' || typeof coords.lng !== 'number') return false;
+  return Math.abs(coords.lat) <= 90 && Math.abs(coords.lng) <= 180;
+}
+
 // ---------- consulta BrasilAPI ----------
 async function fetchBrasilApiCnpj(cnpj) {
   const clean = String(cnpj).replace(/\D/g, '');
@@ -60,7 +71,7 @@ async function fetchBrasilApiCnpj(cnpj) {
         'Accept': 'application/json',
         'User-Agent': GEO_USER_AGENT
       },
-      timeout: 15000
+      timeout: 15
     });
 
     if (resp.statusCode !== 200) {
@@ -121,8 +132,9 @@ async function geocodeAddress(endereco, cidade, cep) {
         url: `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=br`,
         method: 'GET',
         headers: { 'User-Agent': GEO_USER_AGENT },
-        timeout: 10000
+        timeout: 10
       });
+      if (resp.statusCode !== 200) continue;
       const data = JSON.parse(resp.raw);
       if (Array.isArray(data) && data.length > 0 && data[0].lat && data[0].lon) {
         return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
@@ -247,7 +259,7 @@ routerAdd('POST', '/api/scrape/batch', async (c) => {
   const resultados = [];
   const col = $app.dao().findCollectionByNameOrId('leads');
 
-  for (const cnpj of cnpjs.slice(0, 20)) { // limite de 20 por lote p/ evitar timeout
+  for (const cnpj of cnpjs.slice(0, 5)) { // limite de 5 por lote p/ evitar timeout 504 e respeitar rate-limit Nominatim
     try {
       // Verifica se já existe
       const existente = $app.dao().findRecordsByExpr('leads', $dbx.exp('cnpj = {:cnpj}', { cnpj }))[0];
@@ -281,6 +293,10 @@ routerAdd('POST', '/api/scrape/batch', async (c) => {
 
       $app.dao().saveRecord(lead);
       resultados.push({ cnpj, status: 'adicionado', lead: lead.export() });
+      // respeita rate-limit Nominatim 1 req/s
+      if (cnpj !== cnpjs.slice(0, 5).slice(-1)[0]) {
+        await new Promise(r => setTimeout(r, 1100));
+      }
     } catch (e) {
       resultados.push({ cnpj, status: 'erro', error: e.message });
     }
@@ -294,8 +310,8 @@ routerAdd('POST', '/api/scrape/batch', async (c) => {
 // ============================================================
 routerAdd('GET', '/api/scrape/leads', (c) => {
   const status = c.queryParam('status') || '';
-  const limit = parseInt(c.queryParam('limit') || '500', 10);
-  const page = parseInt(c.queryParam('page') || '1', 10);
+  const limit = clampInt(c.queryParam('limit'), 50, 1, 100);
+  const page = clampInt(c.queryParam('page'), 1, 1, 1000);
 
   let query = $app.dao().findRecordsByFilter(
     'leads',
@@ -333,7 +349,7 @@ routerAdd('PATCH', '/api/scrape/leads/:id', (c) => {
 
   const allowed = ['pendente', 'visitado', 'convertido', 'descartado'];
   if (body.status && allowed.includes(body.status)) lead.set('status', body.status);
-  if (body.coords) lead.set('coords', body.coords);
+  if (body.coords && validarCoords(body.coords)) lead.set('coords', body.coords);
   if (body.hunterId !== undefined) lead.set('hunterId', body.hunterId);
   if (body.empresa) lead.set('empresa', body.empresa);
   if (body.telefone !== undefined) lead.set('telefone', body.telefone);

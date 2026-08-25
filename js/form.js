@@ -229,6 +229,13 @@ const FORM = {
     if (!dados.nomeContato) erros.push('Nome do contato é obrigatório');
     const zap = dados.zapContato.replace(/\D/g, '');
     if (zap.length < 10) erros.push('WhatsApp do contato inválido (mín. 10 dígitos)');
+    else if (/^(\d)\1{9,}$/.test(zap)) erros.push('WhatsApp inválido');
+    if (dados.cnpj) {
+      const c = dados.cnpj.replace(/\D/g, '');
+      if (c.length !== 14) erros.push('CNPJ deve ter 14 dígitos');
+      else if (/^(\d)\1{13}$/.test(c)) erros.push('CNPJ inválido');
+    }
+    if (dados.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dados.email)) erros.push('E-mail inválido');
     return erros;
   },
 
@@ -296,6 +303,11 @@ const FORM = {
       dados.syncStatus = 'pending'; // força re-sincronização com o PocketBase
     }
 
+    // aguarda compressão em andamento para não salvar sem foto
+    const fotosPendentes = CAMERA.slots.filter(s => s.input.files.length > 0 && !s.blob);
+    if (fotosPendentes.length) {
+      await new Promise(r => setTimeout(r, 900));
+    }
     const fotos = CAMERA.getFotos();
     const fotoBlob = fotos.length ? fotos[0].blob : null;
     const fotoVersoBlob = fotos.length > 1 ? fotos[1].blob : null;
@@ -322,7 +334,6 @@ const FORM = {
       // 1) Salvar no banco local (frente = foto da fachada; verso salvo à parte)
       const leadId = await dbSalvarLead(dados, fotoBlob);
       if (fotoVersoBlob) await dbSalvarFoto(leadId, fotoVersoBlob);
-      if (fotoBlob) dados.fotoLeadId = leadId;
 
       if (editando) {
         // 2) Atualiza a entrada do histórico (sem duplicar)

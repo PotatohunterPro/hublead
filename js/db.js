@@ -57,22 +57,23 @@ db.version(4).stores({
   }
 });
 
-// Versão 5: leadId indexado no histórico (editar/excluir leads enviados)
-db.version(5).stores({
-  leads: '++id, pbId, cnpj, empresa, segmento, nomeContato, zapContato, status, fonte, lat, lng, criadoEm, dataCadastro, syncStatus',
+// Versão 6: fila de envio + índices para performance
+db.version(6).stores({
+  leads: '++id, pbId, cnpj, empresa, segmento, nomeContato, zapContato, status, fonte, lat, lng, criadoEm, dataCadastro, syncStatus, iaStatus, enviado',
   fila: '++id, criadoEm, tentativas, ultimaTentativa',
   fotos: '++id, leadId, blob',
   historico: '++id, leadId, empresa, segmento, nomeContato, enviadoEm, hunter'
 });
 
-// Helper de normalização de coordenadas
+// Helper de normalização de coordenadas (sem mutar objeto do Dexie)
 function normalizarCoords(lead) {
   if (!lead) return lead;
-  if (lead.lat === undefined && lead.latitude !== undefined) lead.lat = lead.latitude;
-  if (lead.lng === undefined && lead.longitude !== undefined) lead.lng = lead.longitude;
-  if (lead.latitude === undefined && lead.lat !== undefined) lead.latitude = lead.lat;
-  if (lead.longitude === undefined && lead.lng !== undefined) lead.longitude = lead.lng;
-  return lead;
+  const out = { ...lead };
+  if (out.lat === undefined && out.latitude !== undefined) out.lat = out.latitude;
+  if (out.lng === undefined && out.longitude !== undefined) out.lng = out.longitude;
+  if (out.latitude === undefined && out.lat !== undefined) out.latitude = out.lat;
+  if (out.longitude === undefined && out.lng !== undefined) out.longitude = out.lng;
+  return out;
 }
 
 // ----- Salvar Lead -----
@@ -81,22 +82,29 @@ async function dbSalvarLead(leadData, fotoBlob) {
   leadData.dataCadastro = leadData.dataCadastro || new Date().toLocaleString('pt-BR');
   leadData.status = leadData.status || 'pendente';
   leadData.syncStatus = leadData.syncStatus || 'pending';
-  normalizarCoords(leadData);
+  leadData.iaStatus = leadData.iaStatus || 'pronto';
+  leadData.enviado = leadData.enviado || false;
+  // normaliza CNPJ para evitar duplicatas por máscara
+  if (leadData.cnpj) leadData.cnpj = String(leadData.cnpj).replace(/\D/g, '');
+  leadData = normalizarCoords(leadData);
 
   let id;
   if (leadData.id) {
     await db.leads.put(leadData);
     id = leadData.id;
   } else if (leadData.cnpj) {
-    const limpo = String(leadData.cnpj).replace(/\D/g, '');
-    const existente = await db.leads.where('cnpj').equals(limpo).first();
-    if (existente) {
-      Object.assign(existente, leadData);
-      await db.leads.put(existente);
-      id = existente.id;
-    } else {
-      id = await db.leads.add(leadData);
-    }
+    const limpo = leadData.cnpj;
+    // transacional para evitar race com 2 abas
+    id = await db.transaction('rw', db.leads, async () => {
+      const existente = await db.leads.where('cnpj').equals(limpo).first();
+      if (existente) {
+        Object.assign(existente, leadData);
+        await db.leads.put(existente);
+        return existente.id;
+      } else {
+        return await db.leads.add(leadData);
+      }
+    });
   } else {
     id = await db.leads.add(leadData);
   }
@@ -127,6 +135,17 @@ async function dbSalvarNaFila(leadData, fotoBlob) {
 
 // ----- Consultar Leads -----
 async function dbGetLeads(filtro = {}) {
+  // usa índice quando possível para não varrer toda a tabela
+  if (filtro.status && !filtro.segmento && !filtro.fonte) {
+    const leads = await db.leads.where('status').equals(filtro.status).toArray();
+    leads.sort((a, b) => new Date(b.criadoEm) - new Date(a.criadoEm));
+    return leads.map(normalizarCoords);
+  }
+  if (filtro.fonte && !filtro.status && !filtro.segmento) {
+    const leads = await db.leads.where('fonte').equals(filtro.fonte).toArray();
+    leads.sort((a, b) => new Date(b.criadoEm) - new Date(a.criadoEm));
+    return leads.map(normalizarCoords);
+  }
   let collection = db.leads.orderBy('criadoEm').reverse();
   if (filtro.status) collection = collection.filter(l => l.status === filtro.status);
   if (filtro.segmento) collection = collection.filter(l => l.segmento === filtro.segmento);
@@ -162,7 +181,10 @@ const dbSalvarLeadMapa = dbSalvarLead;
 async function dbGetLeadsDoDia() {
   const hoje = new Date().toLocaleDateString('pt-BR');
   const todos = await db.leads.toArray();
-  return todos.filter(l => l.dataCadastro && l.dataCadastro.includes(hoje));
+  return todos.filter(l => {
+    const d = l.criadoEm ? new Date(l.criadoEm).toLocaleDateString('pt-BR') : (l.dataCadastro || '');
+    return d.includes(hoje);
+  });
 }
 
 async function dbGetLeadsPorDia(dias = 7) {
@@ -176,11 +198,9 @@ async function dbGetLeadsPorDia(dias = 7) {
     agrupado[chave] = 0;
   }
   todos.forEach(l => {
-    if (l.dataCadastro) {
-      const dataStr = l.dataCadastro.split(' ')[0];
-      if (agrupado[dataStr] !== undefined) {
-        agrupado[dataStr]++;
-      }
+    const dataStr = l.criadoEm ? new Date(l.criadoEm).toLocaleDateString('pt-BR') : (l.dataCadastro || '').split(' ')[0].replace(',', '');
+    if (agrupado[dataStr] !== undefined) {
+      agrupado[dataStr]++;
     }
   });
   return agrupado;
@@ -331,23 +351,24 @@ async function dbSyncLeads() {
                         (pbLead.cnpj ? await db.leads.where('cnpj').equals(pbLead.cnpj).first() : null);
 
       if (existente) {
-        const patch = existente.syncStatus === 'pending'
-          ? {}
-          : { status: pbLead.status || 'pendente' };
-
-        await db.leads.update(existente.id, {
-          ...patch,
-          pbId: pbLead.id,
-          empresa: pbLead.empresa || existente.empresa || '',
-          endereco: pbLead.endereco || existente.endereco || '',
-          cnae: pbLead.cnae || existente.cnae || '',
-          telefone: pbLead.telefone || existente.telefone || '',
-          cidade: pbLead.cidade || existente.cidade || '',
-          lat: pbLead.coords?.lat || existente.lat || null,
-          lng: pbLead.coords?.lng || existente.lng || null,
-          hunterId: pbLead.hunterId || existente.hunterId || '',
-          syncStatus: existente.syncStatus || 'synced'
-        });
+        // se tem edição local pendente, não sobrescreve NADA do servidor
+        if (existente.syncStatus === 'pending') {
+          await db.leads.update(existente.id, { pbId: pbLead.id });
+        } else {
+          await db.leads.update(existente.id, {
+            pbId: pbLead.id,
+            empresa: pbLead.empresa || existente.empresa || '',
+            endereco: pbLead.endereco || existente.endereco || '',
+            cnae: pbLead.cnae || existente.cnae || '',
+            telefone: pbLead.telefone || existente.telefone || '',
+            cidade: pbLead.cidade || existente.cidade || '',
+            lat: pbLead.coords?.lat || existente.lat || null,
+            lng: pbLead.coords?.lng || existente.lng || null,
+            hunterId: pbLead.hunterId || existente.hunterId || '',
+            status: pbLead.status || existente.status || 'pendente',
+            syncStatus: 'synced'
+          });
+        }
       } else {
         await db.leads.add({
           pbId: pbLead.id,
@@ -405,6 +426,7 @@ async function dbFlushLeadsPendentes() {
         sincronizados++;
       }
     } catch (e) {}
+    await new Promise(r => setTimeout(r, 600));
   }
 
   // 2) Leads com pbId mas com syncStatus pending (PATCH que falhou)
@@ -420,7 +442,8 @@ async function dbFlushLeadsPendentes() {
           telefone: l.telefone || l.telefoneLoja,
           nomeContato: l.nomeContato,
           zapContato: l.zapContato,
-          segmento: l.segmento
+          segmento: l.segmento,
+          email: l.email
         })
       });
       if (resp.ok) {
@@ -428,6 +451,7 @@ async function dbFlushLeadsPendentes() {
         sincronizados++;
       }
     } catch (e) {}
+    await new Promise(r => setTimeout(r, 400));
   }
 
   return sincronizados;
