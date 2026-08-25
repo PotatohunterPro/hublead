@@ -127,6 +127,12 @@
   <section id="tabLead" class="tab-content">
     <div class="tab-scroll">
       <form id="leadForm" novalidate>
+
+        <!-- BANNER DE EDIÇÃO DE LEAD -->
+        <div id="editandoBanner" style="display:none;align-items:center;justify-content:space-between;gap:var(--space-2);margin-bottom:var(--space-4);padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-accent-subtle);border:1px solid var(--color-accent)">
+          <span style="font-size:var(--text-footnote);color:var(--color-accent);font-weight:var(--font-medium)">Editando: <span id="editandoNome"></span></span>
+          <button type="button" id="btnCancelarEdicao" class="btn btn-ghost" style="padding:4px 10px;font-size:12px">Cancelar</button>
+        </div>
         
         <!-- BUSCA RÁPIDA CNPJ -->
         <div class="card" style="margin-bottom:var(--space-4);background:var(--color-surface-secondary)">
@@ -226,10 +232,6 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
-          </div>
-          <div id="ocrStatus" style="display:none;align-items:center;gap:var(--space-2);margin-top:var(--space-2);padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-surface-secondary);border:1px solid var(--color-separator)">
-            <span class="ocr-spinner"></span>
-            <span style="font-size:var(--text-footnote);color:var(--color-text-secondary)">Analisando cartão com IA...</span>
           </div>
         </div>
 
@@ -379,14 +381,14 @@
   <section id="tabFila" class="tab-content">
     <div class="tab-scroll">
       <div class="filtro-row">
-        <button class="filtro-btn active" data-filtro="fila">Pendentes Offline</button>
+        <button class="filtro-btn active" data-filtro="fila">Fila de Envio</button>
         <button class="filtro-btn" data-filtro="historico">Histórico de Envios</button>
       </div>
       <div id="filaContainer">
         <div id="emptyFila" class="empty-state">
           <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
-          <h3>Fila em dia</h3>
-          <p>Nenhum lead pendente de sincronização.</p>
+          <h3>Fila vazia</h3>
+          <p>Salve um lead na aba Novo — após a análise IA ele fica verde para enviar no WhatsApp.</p>
         </div>
         <div id="filaList"></div>
       </div>

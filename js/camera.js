@@ -1,11 +1,11 @@
 // ============================================================
 //  HUB LEADS — Captura de fotos com compressão automática
 //  Suporta 2 espaços: frente do cartão/fachada + verso (opcional)
+//  (a análise IA roda após salvar o lead — ver app.js)
 // ============================================================
 
 const CAMERA = {
-  slots: [],       // [{ input, preview, blob, dataUrl }]
-  onCaptura: null, // callback(fotos) — fotos = [{ blob, dataUrl }] em ordem
+  slots: [], // [{ input, preview, blob, dataUrl }]
   maxFotos: 2,
 
   init() {
@@ -26,7 +26,6 @@ const CAMERA = {
       removeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.limparSlot(slot);
-        if (this.onCaptura) this.onCaptura(this.getFotos());
       });
     }
     preview.addEventListener('click', () => input.click());
@@ -49,8 +48,6 @@ const CAMERA = {
       const svg = slot.preview.querySelector('svg');
       if (svg) svg.style.display = 'none';
       if (span) span.style.display = 'none';
-      // Gatilho pós-captura (scanner de cartão de visita)
-      if (this.onCaptura) this.onCaptura(this.getFotos());
     });
   },
 

@@ -1,55 +1,60 @@
 # 📄 DOCUMENTO MESTRE: HUB LEADS PWA
-**Versão:** 2.0 | **Status:** Em execução
+**Versão:** 3.0 | **Status:** Em execução
 **Projeto:** Aplicativo de Captação de Leads em Campo (Hunter)
 **Infraestrutura:** Oracle VPS (Always Free, Ubuntu 24.04, 1GB RAM)
-**Domínio:** `hublead.pradodacostasolucoes.com.br` (DNS já apontado → 163.176.145.29)
+**Domínio:** `hublead.pradodacostasolucoes.com.br` (DNS apontado → 163.176.145.29)
 
 ---
 
 ## 1. VISÃO GERAL E OBJETIVO
 
-PWA de captação de leads em campo para a **Hub Solução**. O gestor faz a curadoria de empresas (scraping sob demanda da Casa dos Dados), o hunter visita as lojas no mapa e capta os leads — com foto da fachada, GPS, e envio automático formatado para o grupo comercial via WhatsApp.
+PWA de captação de leads em campo para a **Hub Solução**. O hunter fotografa o cartão de visita do cliente (frente e verso), preenche um formulário express de 30 segundos e toca em **Salvar Lead**. O sistema envia ao servidor, que enriquece o cadastro (BrasilAPI) e roda a **IA de visão (Ollama)** sobre as fotos do cartão. O lead entra na **Fila de Envio** — fica **laranja** enquanto a IA analisa e fica **verde** quando está pronto para ser enviado ao gestor via **WhatsApp**.
 
-## 2. ESTRATÉGIA: SCRAPING SOB DEMANDA
-
-**Abandonado:** scraping em massa por CNAE/cidade (frágil, rate limit, leads ruins).
-
-**Adotado:** o gestor cola a **URL individual** de uma empresa da Casa dos Dados:
+## 2. FLUXO DO HUNTER (CAPTAÇÃO EM CAMPO)
 
 ```
-URL: https://casadosdados.com.br/solucao/cnpj/68672122-hemilim-...
-  ↓ POST /api/scrape/url (PocketBase hook)
-  ↓ scraping + extração (razão social, endereço, CNAE, telefone)
-  ↓ geocoding Nominatim (OpenStreetMap, gratuito, 1 req/s)
-  ↓ lead salvo com coords GPS no PocketBase
-  ↓ aparece no mapa como pin azul (pendente)
+1. Aba "Novo" → busca por CNPJ (opcional, autopreenche Receita Federal)
+2. Fotografa o cartão de visita: frente + verso (2 espaços de foto)
+3. Preenche contato e observações rápidas
+4. Toca em "Salvar Lead"
+      ↓
+5. Lead salvo local (IndexedDB) e enviado ao servidor
+      ↓ PocketBase enriquece via BrasilAPI
+      ↓ Ollama Vision analisa frente+verso e consolida os dados
+6. Aba "Fila": item 🟠 "Analisando com IA..." → 🟢 "Pronto para enviar"
+      ↓
+7. Hunter toca em "Enviar no WhatsApp"
+      ↓ mensagem formatada abre no wa.me (destino: nº cadastrado)
+8. Lead sai da fila e entra no "Histórico de Envios"
 ```
 
-**Fluxo do usuário:**
+### Regras do fluxo
+- O envio no WhatsApp **só fica disponível após a análise IA** concluir (item verde)
+- Falha na análise → item **vermelho** com "Tentar novamente" e "Enviar mesmo assim"
+- A IA **complementa** os dados (empresa, contato, telefone, e-mail, endereço, segmento, site, redes) **sem sobrescrever** o que o hunter digitou
+- Offline: o lead é salvo localmente e a análise roda automaticamente ao reconectar (retry a cada 30s + evento online)
 
-### Gestor (computador)
-1. Filtra empresas na Casa dos Dados
-2. Copia a URL → cola no Hub Leads → **"Adicionar ao Mapa"**
-3. Lead aparece no mapa com pin azul
+## 3. SCANNER DE CARTÕES (IA VISION)
 
-### Hunter (celular)
-1. Abre a aba **Mapa** → vê pins azuis (pré-qualificadas)
-2. Clica no pin → dados da empresa + botão **"Navegar até"** (Google Maps)
-3. Visita a loja → aba **Captação** → preenche dados reais (foto, contato, sistema atual)
-4. Lead muda de cor (azul → amarelo/verde conforme resultado)
+- **Modelo:** `jpmarindiaz/lfm2.5-vl-450m:latest` no **Ollama local** da VPS (`127.0.0.1:11434`)
+- **Multi-imagem:** frente + verso vão **juntos** numa única chamada; o modelo consolida tudo num único JSON
+- **Endpoint:** `POST /api/extract-card` (hook `pb_hooks/ocr.pb.js`)
+- **Chaves extraídas:** `nome_empresa`, `nome_contato`, `telefone`, `whatsapp`, `email`, `site`, `endereco`, `cidade`, `ramo_atividade`, `redes_sociais`
+- `site` e `redes_sociais` (sem campo próprio no form) são guardados nas **Anotações** do lead
+- Nenhuma URL/credencial do Ollama fica exposta no frontend — acesso interno ao servidor
 
-## 3. STATUS VISUAL DOS LEADS
+## 4. STATUS DOS LEADS NO MAPA
 
 | Cor | Status | Significado |
 |---|---|---|
-| 🔵 Azul | `pendente` | Gestor adicionou, hunter ainda não visitou |
+| 🔵 Azul | `pendente` | Gestor adicionou (curadoria), hunter ainda não visitou |
 | 🟡 Amarelo | `visitado` | Hunter visitou mas não fechou |
 | 🟢 Verde | `convertido` | Fechou negócio (sistema/maquininha/contador) |
 | ⚪ Cinza | `descartado` | Sem interesse / loja fechada |
 
-**Mapa de calor:** áreas com muitos pins azuis = região de oportunidades; verdes = região produtiva.
+**Fila de Envio (aba Fila):** 🟠 analisando IA · 🔴 falha na análise · 🟢 pronto para enviar
 
-## 4. ARQUITETURA TÉCNICA
+## 5. ARQUITETURA TÉCNICA
 
 ```
 hublead.pradodacostasolucoes.com.br (HTTPS)
@@ -57,6 +62,9 @@ hublead.pradodacostasolucoes.com.br (HTTPS)
   ├── /api/*       → PocketBase (proxy Nginx → 127.0.0.1:8090)
   ├── /_/          → PocketBase Admin UI
   └── /evolution/* → Evolution API (proxy Nginx → 127.0.0.1:8080)
+
+VPS (host): Ollama em 127.0.0.1:11434
+  (container do PocketBase acessa via host.docker.internal — extra_hosts no compose)
 ```
 
 | Componente | Versão | Porta Interna | Exposta? |
@@ -65,67 +73,123 @@ hublead.pradodacostasolucoes.com.br (HTTPS)
 | PostgreSQL | 16-alpine | 5432 | Não |
 | PocketBase | latest | 8090 | Não (via Nginx) |
 | Evolution API | v2.3.7 | 8080 | Não (via Nginx) |
+| Ollama + LFM2.5-VL | latest | 11434 | Não (host only) |
 
-## 5. ENDPOINTS CUSTOM (pb_hooks/scrape.pb.js)
+## 6. ENDPOINTS CUSTOM (pb_hooks)
 
 | Rota | Método | Função |
 |------|--------|--------|
-| `/api/scrape/url` | POST | Recebe URL da Casa dos Dados → scraping → geocode → salva lead |
-| `/api/scrape/leads` | GET | Lista leads do mapa (filtro por status) |
-| `/api/scrape/leads/:id` | PATCH | Atualiza status/coords/hunterId |
-| `/api/scrape/geocode` | GET | Geocoding de endereço via Nominatim |
+| `/api/scrape/url` | POST | Cria/atualiza lead por CNPJ ou URL (BrasilAPI + geocode) |
+| `/api/scrape/cnpj/:cnpj` | GET | Consulta CNPJ na BrasilAPI (autopreenchimento do form) |
+| `/api/scrape/batch` | POST | Adiciona múltiplos CNPJs em lote (máx. 20) |
+| `/api/scrape/leads` | GET | Lista leads (filtros status/limit/page) |
+| `/api/scrape/leads/:id` | PATCH | Atualiza status/empresa/contatos/segmento/email |
+| `/api/scrape/leads/:id` | DELETE | Exclui um lead do servidor |
+| `/api/scrape/geocode` | GET | Geocoding de endereço (Nominatim) |
+| `/api/extract-card` | POST | OCR multi-imagem do cartão via Ollama Vision → JSON |
 
-**Geocoding:** Nominatim (OpenStreetMap) — gratuito, sem API key, 1 req/s, precisão 10-50m.
-**API oficial Casa dos Dados (futuro):** campo "API Key" na Config → habilita busca em massa; vazio → apenas scraping de URLs (grátis).
-
-## 6. FUNCIONALIDADES POR ABA
+## 7. FUNCIONALIDADES POR ABA
 
 | Aba | Função |
 |-----|--------|
-| **Resumo** | Métricas do dia, conversão, gráfico 7 dias |
-| **Sugeridos** | Input de URL da Casa dos Dados + lista de leads com ações (Captar, Visitei, Convertido, Descartar, Navegar) |
-| **Novo** | Formulário de captação (empresa, sistema atual, interesse, contato, foto da fachada, GPS) |
-| **Mapa** | Leaflet com pins coloridos + heatmap + popup com ações |
-| **Fila** | Pendentes (retry 3x) e histórico de envios |
+| **Resumo** | Métricas do dia, pendências, conversão, gráfico de 7 dias |
+| **Sugeridos** | Curadoria do gestor: cola URL/CNPJs da Casa dos Dados → pin no mapa |
+| **Novo** | Form express: CNPJ (autopreenche), fotos frente/verso do cartão, contato, detalhes do sistema (accordion) |
+| **Mapa** | Leaflet com pins coloridos por status + heatmap + navegação GPS |
+| **Fila** | **Fila de Envio** (🟠 analisando → 🟢 pronto → botão WhatsApp) e **Histórico** (enviados) — ambos com **editar/excluir** |
 
-## 7. CRITÉRIOS DE ACEITE
+### Edição e exclusão
+- Leads da Fila e do Histórico podem ser **editados** (formulário recarrega todos os dados; alterações re-sincronizam com o servidor) ou **excluídos** (remove lead + fotos + histórico local **e** o registro do PocketBase)
+- Registros antigos do histórico sem vínculo tentam casar por empresa + WhatsApp
 
-1. [x] Gestor cola URL da Casa dos Dados → lead criado com coords GPS
-2. [x] Lead aparece no mapa como pin azul (pendente)
-3. [x] Hunter clica no pin → vê dados → botão "Navegar até" (Google Maps)
-4. [x] Hunter visita → aba Captação → lead muda de cor (visitado/convertido)
-5. [x] Mapa de calor mostra densidade de visitas
-6. [x] Fila offline (modo avião → captar → reconectar → enviar)
-7. [x] `install.sh` idempotente (pode rodar múltiplas vezes)
-8. [ ] Deploy validado na VPS Oracle
-9. [ ] APK via PWABuilder
-10. [ ] Teste completo do fluxo ponta a ponta
+## 8. DADOS (IndexedDB — Dexie v5)
 
-## 8. ESTADO DA IMPLEMENTAÇÃO
+Tabela única `leads` com os campos do formulário +:
+- `pbId` — registro correspondente no PocketBase
+- `fonte` — `captacao_campo` / `casa_dados` / `brasil_api`
+- `iaStatus` — `analisando` / `pronto` / `erro`
+- `enviado` + `enviadoEm` — controle da fila de envio WhatsApp
+- `syncStatus` — `synced` / `pending` (re-sincronização)
+
+Tabelas auxiliares: `fotos` (frente+verso por leadId), `historico` (leads enviados, com `leadId`), `fila` (legado).
+
+## 9. ENVIO WHATSAPP
+
+- Saída via **wa.me** (100% confiável, sem dependência de containers): abre o WhatsApp com a mensagem formatada + copia o texto para o clipboard
+- **Destino (prioridade):** "WhatsApp de envio" (config) → celular do Hunter (cadastro inicial) → contato do lead (último recurso). Sempre com prefixo +55
+- Evolution API segue disponível em `/evolution/*` para uso futuro
+
+## 10. SERVICE WORKER / ATUALIZAÇÕES
+
+- Assets do próprio app (js/css/html): **network-first** — o celular sempre recebe a versão nova após deploy; cache serve apenas offline
+- CDNs (Dexie/Leaflet): cache-first (versões fixas)
+- Tiles do OpenStreetMap: cache-first com storage próprio (`-tiles`)
+- API (`/api/*`): sempre rede
+
+## 11. INSTALAÇÃO VPS (resumo)
+
+```bash
+# 1. Enviar o projeto
+scp -r . ubuntu@163.176.145.29:~/hubleads
+
+# 2. Infra (Docker, Postgres, PocketBase, Evolution, Nginx, SSL)
+ssh ubuntu@163.176.145.29
+cd ~/hubleads/infra && sudo bash install.sh
+
+# 3. Ollama + modelo de visão (host)
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull jpmarindiaz/lfm2.5-vl-450m:latest
+
+# 4. Recriar o PocketBase (carrega pb_hooks + extra_hosts do Ollama)
+cd ~/hubleads/infra && docker compose up -d --force-recreate pocketbase
+
+# 5. Frontend → /var/www/hublead (nginx serve o PWA)
+```
+
+### Operação
+| Comando | Função |
+|---|---|
+| `sudo bash /opt/hubleads/doctor` | Diagnóstico completo |
+| `sudo bash /opt/hubleads/backup.sh` | Backup manual (cron 03:00) |
+| `docker compose ps` (em `/opt/hubleads`) | Status dos containers |
+
+## 12. ESTRUTURA DO PROJETO
+
+```
+hubleads/
+├── index.html              # SPA (5 abas)
+├── manifest.json           # PWA
+├── sw.js                   # Service Worker (network-first p/ app assets)
+├── css/                    # design tokens + componentes
+├── js/
+│   ├── db.js               # IndexedDB (Dexie v5) + sync PocketBase + fila
+│   ├── api.js              # wa.me, CNPJ (BrasilAPI), extrairDadosCartao (IA)
+│   ├── camera.js           # 2 slots de foto (frente/verso) + compressão
+│   ├── form.js             # form express, edição de leads, submit → fila
+│   ├── map.js              # Leaflet + heatmap
+│   ├── sugeridos.js        # curadoria do gestor (URL/CNPJs)
+│   └── app.js              # controller: fila de envio, pipeline IA, dashboard
+├── pb_hooks/
+│   ├── scrape.pb.js        # leads: CRUD + BrasilAPI + geocode
+│   └── ocr.pb.js           # /api/extract-card (Ollama Vision multi-imagem)
+├── infra/                  # compose, nginx, install/backup/doctor
+└── docs/                   # este documento + schemas
+```
+
+## 13. ESTADO DA IMPLEMENTAÇÃO
 
 ### ✅ Concluído
-- Frontend PWA completo (5 abas, offline-first, dark mode)
-- Scraping sob demanda + geocoding (pb_hooks)
-- Fila offline com retry + envio Evolution API (texto + foto)
-- Mapa Leaflet com pins coloridos, heatmap e ações por popup
-- Geolocalização automática no submit (GPS → fallback geocode)
-- Sync de leads do mapa (criar/atualizar status no PocketBase)
-- Infra: compose.yaml, install.sh (16 fases, rollback), update/backup/restore/doctor/uninstall
-- Nginx reverse proxy + SSL Let's Encrypt + UFW + HSTS
-- DNS apontado: `hublead.pradodacostasolucoes.com.br` → `163.176.145.29`
+- Form express com autopreenchimento CNPJ (BrasilAPI) e GPS em background
+- Scanner de cartões frente/verso via Ollama Vision (multi-imagem consolidada)
+- Fluxo Salvar → Servidor → IA → Fila (🟠→🟢) → WhatsApp → Histórico
+- Edição e exclusão de leads (fila + histórico, com sync no servidor)
+- Mapa com pins/heatmap; curadoria do gestor (Casa dos Dados / lote CNPJs)
+- SW network-first (sem mix de versões no celular)
+- Infra completa (compose, nginx, SSL, backup, doctor) + Ollama no host
 
 ### ⏳ Pendente (manual na VPS)
-- Executar `sudo bash install.sh` na VPS
-- Criar collections `leads` e `hunters` no admin PocketBase (schema em `POCKETBASE_SCHEMA.md`)
-- Conectar WhatsApp na Evolution API (QR Code)
-- Teste ponta a ponta (URL → lead → mapa → visita → captação → WhatsApp)
-- APK via PWABuilder (Fase 5)
-
-## 9. PRÓXIMOS PASSOS
-
-1. Enviar projeto para a VPS (`scp -r . ubuntu@163.176.145.29:~/hubleads`)
-2. Rodar `sudo bash install.sh` (dentro de `infra/`)
-3. Criar collections no PocketBase Admin
-4. Conectar WhatsApp (Evolution API)
-5. Testar fluxo completo
-6. Gerar APK via PWABuilder
+- Instalar Ollama + modelo na VPS (`ollama pull jpmarindiaz/lfm2.5-vl-450m:latest`)
+- Recriar container do PocketBase após atualizar `pb_hooks/`
+- Deploy do frontend em `/var/www/hublead`
+- Teste ponta a ponta (foto → salvar → IA → fila verde → WhatsApp)
+- Criar collections `leads`/`hunters` no admin PocketBase (ver POCKETBASE_SCHEMA.md)

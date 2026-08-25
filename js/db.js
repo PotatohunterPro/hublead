@@ -57,6 +57,14 @@ db.version(4).stores({
   }
 });
 
+// Versão 5: leadId indexado no histórico (editar/excluir leads enviados)
+db.version(5).stores({
+  leads: '++id, pbId, cnpj, empresa, segmento, nomeContato, zapContato, status, fonte, lat, lng, criadoEm, dataCadastro, syncStatus',
+  fila: '++id, criadoEm, tentativas, ultimaTentativa',
+  fotos: '++id, leadId, blob',
+  historico: '++id, leadId, empresa, segmento, nomeContato, enviadoEm, hunter'
+});
+
 // Helper de normalização de coordenadas
 function normalizarCoords(lead) {
   if (!lead) return lead;
@@ -200,12 +208,44 @@ async function dbGetFoto(leadId) {
   return db.fotos.where('leadId').equals(leadId).first();
 }
 
+// Salva fotos adicionais (verso do cartão) vinculadas ao lead
+async function dbSalvarFoto(leadId, blob) {
+  if (!blob) return null;
+  return db.fotos.add({ leadId: Number(leadId), blob });
+}
+
+// Todas as fotos de um lead (frente + verso), em ordem de cadastro
+async function dbGetFotosDoLead(leadId) {
+  return db.fotos.where('leadId').equals(Number(leadId)).toArray();
+}
+
+// ----- Fila de Envio WhatsApp -----
+// Leads captados em campo que ainda não foram enviados
+// (exclui os de curadoria do gestor: casa_dados / brasil_api)
+async function dbGetLeadsNaFila() {
+  const todos = await db.leads.orderBy('criadoEm').reverse().toArray();
+  return todos
+    .map(normalizarCoords)
+    .filter((l) => !l.enviado && l.fonte !== 'casa_dados' && l.fonte !== 'brasil_api');
+}
+
+// Marca o lead como enviado no WhatsApp e o tira da fila
+async function dbMarcarEnviado(id) {
+  const lead = await db.leads.get(Number(id));
+  if (!lead) return null;
+  lead.enviado = true;
+  lead.enviadoEm = new Date().toLocaleString('pt-BR');
+  await db.leads.put(lead);
+  return lead;
+}
+
 async function dbGetHistorico(limite = 50) {
   return db.historico.orderBy('enviadoEm').reverse().limit(limite).toArray();
 }
 
 async function dbSalvarNoHistorico(leadData) {
   return db.historico.add({
+    leadId: leadData.id || leadData.leadId || null,
     empresa: leadData.empresa,
     segmento: leadData.segmento,
     nomeContato: leadData.nomeContato,
@@ -213,6 +253,37 @@ async function dbSalvarNoHistorico(leadData) {
     enviadoEm: new Date().toLocaleString('pt-BR'),
     hunter: leadData.hunter || API.getHunterNome()
   });
+}
+
+// Atualiza a entrada do histórico vinculada a um lead (após edição)
+async function dbAtualizarHistoricoPorLead(leadId, dados) {
+  const entry = await db.historico.where('leadId').equals(Number(leadId)).first();
+  if (!entry) return null;
+  if (dados.empresa) entry.empresa = dados.empresa;
+  if (dados.segmento) entry.segmento = dados.segmento;
+  if (dados.nomeContato) entry.nomeContato = dados.nomeContato;
+  if (dados.zapContato) entry.zapContato = dados.zapContato;
+  return db.historico.put(entry);
+}
+
+// ----- Excluir Lead (local + fotos + histórico + PocketBase) -----
+async function dbExcluirLead(id) {
+  const leadId = Number(id);
+  const lead = await db.leads.get(leadId);
+  if (!lead) return false;
+
+  await db.leads.delete(leadId);
+  const fotos = await db.fotos.where('leadId').equals(leadId).toArray();
+  if (fotos.length) await db.fotos.bulkDelete(fotos.map((f) => f.id));
+  await db.historico.where('leadId').equals(leadId).delete();
+
+  // Remove também do PocketBase, se sincronizado e online
+  if (lead.pbId && navigator.onLine) {
+    try {
+      await fetch('/api/scrape/leads/' + lead.pbId, { method: 'DELETE' });
+    } catch (e) {}
+  }
+  return true;
 }
 
 // ----- Atualização de Status -----
@@ -348,7 +419,8 @@ async function dbFlushLeadsPendentes() {
           empresa: l.empresa,
           telefone: l.telefone || l.telefoneLoja,
           nomeContato: l.nomeContato,
-          zapContato: l.zapContato
+          zapContato: l.zapContato,
+          segmento: l.segmento
         })
       });
       if (resp.ok) {

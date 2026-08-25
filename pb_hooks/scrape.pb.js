@@ -8,6 +8,7 @@
 //    POST   /api/scrape/batch         → adiciona múltiplos CNPJs de uma vez
 //    GET    /api/scrape/leads         → lista leads do mapa (com filtros)
 //    PATCH  /api/scrape/leads/:id     → atualiza status/coords/dados de um lead
+//    DELETE /api/scrape/leads/:id     → exclui um lead
 //    GET    /api/scrape/geocode       → geocoding de um endereço (Nominatim)
 // ============================================================
 
@@ -339,9 +340,31 @@ routerAdd('PATCH', '/api/scrape/leads/:id', (c) => {
   if (body.nomeContato !== undefined) lead.set('nomeContato', body.nomeContato);
   if (body.zapContato !== undefined) lead.set('zapContato', body.zapContato);
   if (body.segmento !== undefined) lead.set('segmento', body.segmento);
+  if (body.email !== undefined) lead.set('email', body.email);
 
   $app.dao().saveRecord(lead);
   return c.json(200, { success: true, lead: lead.export() });
+});
+
+// ============================================================
+//  DELETE /api/scrape/leads/:id
+// ============================================================
+routerAdd('DELETE', '/api/scrape/leads/:id', (c) => {
+  const id = c.pathParam('id');
+  let lead;
+  try {
+    lead = $app.dao().findRecordById('leads', id);
+  } catch (e) {
+    return c.json(404, { error: 'Lead não encontrado' });
+  }
+
+  if (!lead) {
+    return c.json(404, { error: 'Lead não encontrado' });
+  }
+
+  $app.dao().deleteRecord(lead);
+  $app.logger().info('Lead excluído', { id });
+  return c.json(200, { success: true });
 });
 
 // ============================================================

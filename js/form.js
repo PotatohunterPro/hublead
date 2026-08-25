@@ -9,8 +9,8 @@ const FORM = {
   btnBuscarCnpj: null,
   btnToggleDetalhes: null,
   _cachedCoords: null,
-  _ocrEmAndamento: false,
-  _ocrTimer: null,
+  _editandoLeadId: null,
+  _leadEmEdicao: null,
 
   init(formId, btnId) {
     this.form = document.getElementById(formId);
@@ -48,10 +48,81 @@ const FORM = {
       this.btnBuscarCnpj.addEventListener('click', () => this.buscarCnpj());
     }
 
-    // Scanner de cartão de visita: dispara a análise IA ao capturar/trocar as fotos
-    CAMERA.onCaptura = (fotos) => this.analisarCartao(fotos);
+    // Cancelar edição de lead
+    const btnCancelEdicao = document.getElementById('btnCancelarEdicao');
+    if (btnCancelEdicao) {
+      btnCancelEdicao.addEventListener('click', () => this.cancelarEdicao());
+    }
 
     this.form.addEventListener('submit', (e) => this.submit(e));
+  },
+
+  // ===== Edição de Lead Enviado =====
+  editarLead(lead) {
+    if (!lead) return;
+    this._editandoLeadId = lead.id;
+    this._leadEmEdicao = lead;
+
+    const setVal = (id, v) => {
+      const el = document.getElementById(id);
+      if (el && v !== undefined && v !== null) el.value = v;
+    };
+    const setOption = (field, v) => {
+      if (!v) return;
+      const btn = document.querySelector(`.btn-option-group[data-field="${field}"] .btn-option[data-value="${v}"]`);
+      if (!btn) return;
+      btn.closest('.btn-option-group').querySelectorAll('.btn-option').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+    };
+
+    setVal('inputEmpresa', lead.empresa);
+    setVal('inputCnpj', lead.cnpj);
+    setVal('inputCidadeBairro', lead.cidadeBairro || [lead.endereco, lead.cidade].filter(Boolean).join(' - '));
+    setVal('inputNomeContato', lead.nomeContato);
+    setVal('selectCargo', lead.cargo);
+    setVal('inputZap', lead.zapContato);
+    setVal('textareaFaltas', lead.faltas || lead.dorPrincipal || '');
+    setVal('selectSegmento', lead.segmento);
+    setVal('inputTelLoja', lead.telefoneLoja);
+    setVal('inputEmail', lead.email);
+    setVal('inputQualSistema', lead.qualSistema);
+    setVal('inputMensalidade', lead.mensalidade);
+    setOption('demo', lead.demo);
+    setOption('temSistema', lead.temSistema);
+    setOption('suporteBom', lead.suporteBom);
+    setOption('trocaAtendimento', lead.trocaAtendimento);
+    setOption('trocaValor', lead.trocaValor);
+
+    // Abre o accordion de detalhes se houver dados neles
+    const temDetalhes = !!(lead.segmento || lead.telefoneLoja || lead.email || lead.qualSistema || lead.mensalidade || lead.temSistema || lead.suporteBom || lead.trocaAtendimento || lead.trocaValor);
+    const detalhes = document.getElementById('detalhesSistema');
+    const icone = document.getElementById('iconToggleDetalhes');
+    if (detalhes) detalhes.classList.toggle('visible', !!temDetalhes);
+    if (icone) icone.style.transform = temDetalhes ? 'rotate(180deg)' : 'rotate(0deg)';
+
+    // Banner de edição
+    const banner = document.getElementById('editandoBanner');
+    const nomeEl = document.getElementById('editandoNome');
+    if (banner) banner.style.display = 'flex';
+    if (nomeEl) nomeEl.textContent = lead.empresa || 'Lead';
+
+    if (this.btnSubmit) {
+      this.btnSubmit.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Atualizar Lead';
+    }
+
+    App.mudarTab('lead');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    App.toast('Editando lead — faça as alterações e salve', 'success');
+  },
+
+  cancelarEdicao() {
+    this._editandoLeadId = null;
+    this._leadEmEdicao = null;
+    const banner = document.getElementById('editandoBanner');
+    if (banner) banner.style.display = 'none';
+    this.limpar();
+    if (this.btnSubmit) this.btnSubmit.innerHTML = this._btnSubmitText();
+    App.toast('Edição cancelada', 'warning');
   },
 
   // Pré-carrega o GPS em background assim que a aba "Novo" é selecionada
@@ -113,130 +184,6 @@ const FORM = {
 
     btn.disabled = false;
     btn.innerHTML = txtOriginal;
-  },
-
-  // ===== Scanner de Cartão de Visita (OCR IA via backend/Ollama) =====
-  // Recebe as fotos do CAMERA (frente + verso opcional). Após a 1ª foto,
-  // abre uma janela de 4s para o usuário adicionar o verso; com as 2
-  // fotos (ou no fim da janela), envia tudo para uma única análise.
-  analisarCartao(fotos) {
-    fotos = Array.isArray(fotos) ? fotos : [];
-    if (this._ocrEmAndamento) return; // bloqueia análises duplicadas
-    if (!navigator.onLine) return; // sem backend não há análise
-    clearTimeout(this._ocrTimer);
-
-    if (fotos.length === 0) {
-      this.setOcrStatus(false);
-      return;
-    }
-
-    if (fotos.length < CAMERA.maxFotos) {
-      // Janela de espera para adicionar o verso antes de disparar
-      this.setOcrStatus(true, 'Analisando em instantes — adicione o verso (opcional)');
-      this._ocrTimer = setTimeout(() => this.executarAnalise(), 4000);
-      return;
-    }
-
-    this.executarAnalise();
-  },
-
-  async executarAnalise() {
-    const fotos = CAMERA.getFotos();
-    if (!fotos.length) {
-      this.setOcrStatus(false);
-      return;
-    }
-    this._ocrEmAndamento = true;
-    this.setOcrStatus(true, 'Analisando cartão com IA...');
-    if (this.btnSubmit) this.btnSubmit.disabled = true;
-
-    try {
-      const res = await API.extrairDadosCartao(fotos.map((f) => f.dataUrl));
-      const dados = res && (res.data || res.dados);
-      if (res && res.success && dados) {
-        const n = this.preencherComCartao(dados);
-        if (n > 0) App.toast('Cartão analisado — ' + n + ' campo(s) preenchido(s)', 'success');
-        else App.toast('Nenhum dado legível no cartão — preencha manualmente', 'warning');
-      } else {
-        App.toast((res && res.error) || 'Não foi possível ler o cartão — preencha manualmente', 'warning');
-      }
-    } catch (err) {
-      console.error('OCR do cartão falhou:', err);
-      App.toast('Falha ao analisar o cartão — preencha manualmente', 'warning');
-    }
-
-    this.setOcrStatus(false);
-    if (this.btnSubmit) this.btnSubmit.disabled = false;
-    this._ocrEmAndamento = false;
-  },
-
-  // Preenche o formulário com os dados extraídos do cartão.
-  // Só preenche campos vazios — nunca sobrescreve o que o hunter digitou.
-  preencherComCartao(dados) {
-    let n = 0;
-    const preencher = (id, valor) => {
-      const el = document.getElementById(id);
-      if (!el || !valor) return;
-      if (el.value.trim()) return;
-      el.value = valor;
-      n++;
-    };
-
-    preencher('inputEmpresa', dados.nome_empresa);
-    preencher('inputNomeContato', dados.nome_contato);
-    preencher('inputTelLoja', dados.telefone);
-    const zap = dados.whatsapp || dados.telefone;
-    if (zap) preencher('inputZap', this.formatarFone(zap));
-    preencher('inputEmail', dados.email);
-    preencher('inputCidadeBairro', [dados.endereco, dados.cidade].filter(Boolean).join(' - '));
-    this.preencherSegmento(dados.ramo_atividade);
-
-    // Site e redes sociais não têm campo próprio → vão para as anotações
-    const extras = [
-      dados.site ? 'Site: ' + dados.site : '',
-      dados.redes_sociais ? 'Redes: ' + dados.redes_sociais : ''
-    ].filter(Boolean).join(' | ');
-    if (extras) {
-      const anot = document.getElementById('textareaFaltas');
-      if (anot && !anot.value.trim()) {
-        anot.value = extras;
-        n++;
-      }
-    }
-    return n;
-  },
-
-  // Tenta encaixar o ramo do cartão nas opções existentes do select
-  preencherSegmento(ramo) {
-    if (!ramo) return;
-    const sel = document.getElementById('selectSegmento');
-    if (!sel || sel.value) return;
-    const alvo = String(ramo).toLowerCase().trim();
-    const opcao = Array.from(sel.options).find((o) => {
-      if (!o.value || o.value === 'Outro') return false;
-      const partes = o.value.toLowerCase().split('/').map((p) => p.trim());
-      return partes.some((p) => p && (alvo.includes(p) || p.includes(alvo)));
-    });
-    if (opcao) sel.value = opcao.value;
-  },
-
-  // Máscara BR — mesma regra do inputZap em index.html
-  formatarFone(v) {
-    const d = String(v).replace(/\D/g, '');
-    if (d.length <= 2) return d;
-    if (d.length <= 6) return '(' + d.slice(0, 2) + ') ' + d.slice(2);
-    if (d.length <= 10) return '(' + d.slice(0, 2) + ') ' + d.slice(2, 6) + '-' + d.slice(6);
-    return '(' + d.slice(0, 2) + ') ' + d.slice(2, 7) + '-' + d.slice(7, 11);
-  },
-
-  setOcrStatus(ativo, texto) {
-    const el = document.getElementById('ocrStatus');
-    if (!el) return;
-    if (texto) {
-      const txt = el.querySelector('span:last-child');
-      if (txt) txt.textContent = texto;
-    }
-    el.style.display = ativo ? 'flex' : 'none';
   },
 
   getSelected(field) {
@@ -325,7 +272,7 @@ const FORM = {
     this.btnSubmit.disabled = true;
     this.btnSubmit.innerHTML = '<span class="skeleton-circle" style="display:inline-block;width:18px;height:18px;margin-right:8px;vertical-align:middle"></span> Salvando...';
 
-    const dados = this.coletarDados();
+    let dados = this.coletarDados();
     const erros = this.validar(dados);
 
     if (erros.length > 0) {
@@ -335,36 +282,63 @@ const FORM = {
       return;
     }
 
-    const fotoBlob = CAMERA.getBlob();
+    const editando = !!(this._editandoLeadId && this._leadEmEdicao);
+    if (editando) {
+      // Preserva campos que não estão no formulário (pbId, fonte, endereço do CNPJ...)
+      dados = Object.assign({}, this._leadEmEdicao, dados);
+      dados.id = this._editandoLeadId;
+      dados.criadoEm = this._leadEmEdicao.criadoEm || dados.criadoEm;
+      dados.dataCadastro = this._leadEmEdicao.dataCadastro || dados.dataCadastro;
+      dados.fonte = this._leadEmEdicao.fonte || dados.fonte;
+      dados.syncStatus = 'pending'; // força re-sincronização com o PocketBase
+    }
+
+    const fotos = CAMERA.getFotos();
+    const fotoBlob = fotos.length ? fotos[0].blob : null;
+    const fotoVersoBlob = fotos.length > 1 ? fotos[1].blob : null;
 
     try {
-      // Coordenadas
-      const coords = await this.obterCoordenadas(dados);
-      if (coords) {
-        dados.lat = coords.latitude;
-        dados.lng = coords.longitude;
-        dados.latitude = coords.latitude;
-        dados.longitude = coords.longitude;
+      // Coordenadas (só na criação — edição preserva a localização original)
+      if (!editando) {
+        const coords = await this.obterCoordenadas(dados);
+        if (coords) {
+          dados.lat = coords.latitude;
+          dados.lng = coords.longitude;
+          dados.latitude = coords.latitude;
+          dados.longitude = coords.longitude;
+        }
+        // Com foto de cartão, o lead entra na fila aguardando a análise IA
+        dados.iaStatus = fotos.length ? 'analisando' : 'pronto';
       }
+      if (!dados.iaStatus) dados.iaStatus = 'pronto';
+      if (dados.enviado === undefined) dados.enviado = false;
 
       // Status
       dados.status = dados.demo === 'Sim' ? 'convertido' : 'visitado';
 
-      // 1) Salvar no banco local
+      // 1) Salvar no banco local (frente = foto da fachada; verso salvo à parte)
       const leadId = await dbSalvarLead(dados, fotoBlob);
+      if (fotoVersoBlob) await dbSalvarFoto(leadId, fotoVersoBlob);
       if (fotoBlob) dados.fotoLeadId = leadId;
 
-      // 2) Salvar no histórico
-      await dbSalvarNoHistorico(dados);
-
-      // 3) Abrir WhatsApp direto (wa.me/ + cópia p/ clipboard)
-      API.enviarWhatsApp(dados);
-
-      App.toast('Lead salvo com sucesso! WhatsApp aberto.', 'success');
+      if (editando) {
+        // 2) Atualiza a entrada do histórico (sem duplicar)
+        await dbAtualizarHistoricoPorLead(leadId, dados);
+        App.toast('Lead atualizado!', 'success');
+      } else {
+        App.toast(dados.iaStatus === 'analisando'
+          ? 'Lead salvo! IA analisando o cartão...'
+          : 'Lead salvo! Pronto para enviar.', 'success');
+      }
 
       this.limpar();
       App.atualizarBadge();
       App.atualizarDashboard();
+      App.carregarFila();
+      App.carregarHistorico();
+      // Vai para a fila: item laranja (analisando) → verde (pronto p/ envio)
+      App.mudarTab('fila');
+      if (!editando) App.processarAnalisesPendentes();
       if (typeof MAPA !== 'undefined') MAPA.refresh();
       if (typeof SUGERIDOS !== 'undefined') SUGERIDOS.refresh();
 
@@ -394,9 +368,13 @@ const FORM = {
 
     CAMERA.limpar();
     this._cachedCoords = null;
+    this._editandoLeadId = null;
+    this._leadEmEdicao = null;
+    const banner = document.getElementById('editandoBanner');
+    if (banner) banner.style.display = 'none';
   },
 
   _btnSubmitText() {
-    return '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2z"/></svg> Salvar & Enviar no WhatsApp';
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2z"/></svg> Salvar Lead';
   }
 };
