@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hubleads-v9';
+const CACHE_NAME = 'hubleads-v10';
 const ASSETS = [
   '/',
   '/index.html',

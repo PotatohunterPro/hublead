@@ -10,10 +10,10 @@
 //
 //  Requisito na VPS (Ollama no host, porta 11434):
 //    curl -fsSL https://ollama.com/install.sh | sh
-//    ollama pull jpmarindiaz/lfm2.5-vl-450m:latest
+//    ollama pull hf.co/LiquidAI/LFM2.5-VL-450M-GGUF:Q8_0
 // ============================================================
 
-const OLLAMA_MODEL = 'jpmarindiaz/lfm2.5-vl-450m:latest';
+const OLLAMA_MODEL = 'hf.co/LiquidAI/LFM2.5-VL-450M-GGUF:Q8_0';
 // 127.0.0.1 cobre PB rodando direto no host;
 // host.docker.internal cobre PB em container (compose.yaml com extra_hosts)
 const OLLAMA_URLS = [

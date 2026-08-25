@@ -1,5 +1,5 @@
 # 📄 DOCUMENTO MESTRE: HUB LEADS PWA
-**Versão:** 3.0 | **Status:** Em execução
+**Versão:** 3.1 | **Status:** Em execução
 **Projeto:** Aplicativo de Captação de Leads em Campo (Hunter)
 **Infraestrutura:** Oracle VPS (Always Free, Ubuntu 24.04, 1GB RAM)
 **Domínio:** `hublead.pradodacostasolucoes.com.br` (DNS apontado → 163.176.145.29)
@@ -36,7 +36,7 @@ PWA de captação de leads em campo para a **Hub Solução**. O hunter fotografa
 
 ## 3. SCANNER DE CARTÕES (IA VISION)
 
-- **Modelo:** `jpmarindiaz/lfm2.5-vl-450m:latest` no **Ollama local** da VPS (`127.0.0.1:11434`)
+- **Modelo:** `hf.co/LiquidAI/LFM2.5-VL-450M-GGUF:Q8_0` no **Ollama local** da VPS (`127.0.0.1:11434`)
 - **Multi-imagem:** frente + verso vão **juntos** numa única chamada; o modelo consolida tudo num único JSON
 - **Endpoint:** `POST /api/extract-card` (hook `pb_hooks/ocr.pb.js`)
 - **Chaves extraídas:** `nome_empresa`, `nome_contato`, `telefone`, `whatsapp`, `email`, `site`, `endereco`, `cidade`, `ramo_atividade`, `redes_sociais`
@@ -73,7 +73,7 @@ VPS (host): Ollama em 127.0.0.1:11434
 | PostgreSQL | 16-alpine | 5432 | Não |
 | PocketBase | latest | 8090 | Não (via Nginx) |
 | Evolution API | v2.3.7 | 8080 | Não (via Nginx) |
-| Ollama + LFM2.5-VL | latest | 11434 | Não (host only) |
+| Ollama + LFM2.5-VL Q8_0 | hf.co/LiquidAI/LFM2.5-VL-450M-GGUF:Q8_0 | 11434 | Não (host only) |
 
 ## 6. ENDPOINTS CUSTOM (pb_hooks)
 
@@ -138,7 +138,7 @@ cd ~/hubleads/infra && sudo bash install.sh
 
 # 3. Ollama + modelo de visão (host)
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull jpmarindiaz/lfm2.5-vl-450m:latest
+ollama pull hf.co/LiquidAI/LFM2.5-VL-450M-GGUF:Q8_0
 
 # 4. Recriar o PocketBase (carrega pb_hooks + extra_hosts do Ollama)
 cd ~/hubleads/infra && docker compose up -d --force-recreate pocketbase
@@ -188,7 +188,7 @@ hubleads/
 - Infra completa (compose, nginx, SSL, backup, doctor) + Ollama no host
 
 ### ⏳ Pendente (manual na VPS)
-- Instalar Ollama + modelo na VPS (`ollama pull jpmarindiaz/lfm2.5-vl-450m:latest`)
+- Instalar Ollama + modelo na VPS (`ollama pull hf.co/LiquidAI/LFM2.5-VL-450M-GGUF:Q8_0`)
 - Recriar container do PocketBase após atualizar `pb_hooks/`
 - Deploy do frontend em `/var/www/hublead`
 - Teste ponta a ponta (foto → salvar → IA → fila verde → WhatsApp)
