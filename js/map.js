@@ -41,12 +41,14 @@ const MAPA = {
 
   async carregarPontos() {
     if (navigator.onLine) {
-      await dbSyncLeads();
+      try { await dbSyncLeads(); } catch (e) {}
     }
 
     const leads = await dbGetLeadsComCoordenadas();
 
-    // Heatmap: leads visitados e convertidos
+    // Heatmap: só desenha quando o mapa está visível (evita IndexSizeError width 0)
+    const container = document.getElementById('mapContainer');
+    const visivel = container && container.offsetWidth > 0 && container.offsetHeight > 0;
     const heatPoints = [];
     leads
       .filter(l => l.status === 'convertido' || l.status === 'visitado')
@@ -55,7 +57,9 @@ const MAPA = {
         const lng = l.lng || l.longitude;
         if (lat && lng) heatPoints.push([lat, lng, 0.6]);
       });
-    this.heatLayer.setLatLngs(heatPoints);
+    if (visivel) {
+      try { this.heatLayer.setLatLngs(heatPoints); } catch (e) {}
+    }
 
     // Marcadores
     this.markersLayer.clearLayers();
@@ -162,8 +166,10 @@ const MAPA = {
 
   refresh() {
     if (this.map) {
-      setTimeout(() => this.map.invalidateSize(), 250);
-      this.carregarPontos();
+      setTimeout(() => {
+        try { this.map.invalidateSize(); } catch (e) {}
+        this.carregarPontos();
+      }, 200);
     }
   }
 };

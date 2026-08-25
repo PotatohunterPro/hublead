@@ -67,7 +67,13 @@ const App = {
       if (typeof FORM !== 'undefined') FORM.prepararGeolocalizacao();
     }
     if (tab === 'mapa') {
-      if (typeof MAPA !== 'undefined') MAPA.refresh();
+      if (typeof MAPA !== 'undefined') {
+        MAPA.refresh();
+        // garante que o Leaflet recalcule o tamanho após a div ficar visível
+        setTimeout(() => {
+          try { if (MAPA.map) MAPA.map.invalidateSize(); } catch (e) {}
+        }, 200);
+      }
     }
     if (tab === 'fila') {
       this.carregarFila();

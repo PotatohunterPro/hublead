@@ -36,7 +36,7 @@ const VERSION = {
       const res = await fetch(`https://api.github.com/repos/${this.repo}/releases/latest`, {
         headers: { 'Accept': 'application/vnd.github+json' }
       });
-      if (!res.ok) return;
+      if (!res.ok) return; // silencia 404 quando não há releases
       const data = await res.json();
       const tag = (data.tag_name || '').replace(/^v/, '');
       const localVer = (this.local?.version || '').replace(/^v/, '');
@@ -53,7 +53,9 @@ const VERSION = {
           els.config.appendChild(a);
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      // silencia erro de rede/GitHub privado sem sujar o console
+    }
   }
 };
 

@@ -343,7 +343,7 @@ const dbAtualizarStatusLeadMapa = dbAtualizarStatusLead;
 // ----- Sincronização com o PocketBase -----
 async function dbSyncLeads() {
   try {
-    const resp = await fetch('/api/scrape/leads?limit=500');
+    const resp = await fetch('/api/scrape/leads?limit=100');
     if (!resp.ok) return 0;
     const leads = await resp.json();
     for (const pbLead of leads) {
