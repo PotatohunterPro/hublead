@@ -250,11 +250,14 @@ const FORM = {
       } catch (e) {}
     }
 
-    // 3) Fallback: geocode via endereço
+    // 3) Fallback: geocode via endereço (timeout curto p/ nunca travar o submit)
     const endereco = [dados.cidadeBairro, dados.empresa].filter(Boolean).join(', ');
     if (endereco && navigator.onLine) {
       try {
-        const resp = await fetch('/api/scrape/geocode?endereco=' + encodeURIComponent(endereco));
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 5000);
+        const resp = await fetch('/api/scrape/geocode?endereco=' + encodeURIComponent(endereco), { signal: controller.signal });
+        clearTimeout(t);
         const data = await resp.json();
         if (data.success && data.coords) {
           return { latitude: data.coords.lat, longitude: data.coords.lng };
