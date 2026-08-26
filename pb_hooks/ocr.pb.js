@@ -128,12 +128,20 @@ function chamarOllama(imagens) {
 routerAdd('POST', '/api/extract-card', (e) => {
   let body = getRequestBody(e);
 
-  // fallback FormData (campo "image")
+  // SE o body for o objeto FormData do PocketBase, extrair campo 'image' manualmente
+  if (body && body instanceof FormData) {
+    const fv = e.request.formValue('image');
+    if (fv) body = { image: fv };
+  }
+
+  // fallback: se ainda não temos as chaves esperadas, tentar parsear JSON string
   if (!body.images && !body.image) {
-    try {
-      const fv = e.request.formValue('image');
-      if (fv) body = { image: fv };
-    } catch (err) {}
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch (e) {}
+    }
+    if (!body.images && !body.image) {
+      body = body || {};
+    }
   }
 
   const imagens = limparImagens(body);
