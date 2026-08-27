@@ -326,6 +326,23 @@ wait_health() {
 }
 
 # ----------------------------------------------------------------------------
+#  FASE 10.5 — Verificação do hook OCR (evita drift entre repo e /opt)
+# ----------------------------------------------------------------------------
+verify_hooks() {
+    info "Verificando se a rota /api/extract-card foi registrada"
+    local http_code
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" -X GET http://127.0.0.1:8090/api/extract-card || echo "000")
+    # 405 = rota existe mas método é outro (esperado pra GET numa rota POST-only)
+    if [ "$http_code" = "405" ]; then
+        ok "Hook OCR ativo (/api/extract-card registrado)"
+    else
+        err "Hook OCR NÃO registrado (HTTP ${http_code} em vez de 405)."
+        err "Verifique: sudo docker compose -f ${APP_DIR}/compose.yaml logs pocketbase --tail 50"
+        exit 1
+    fi
+}
+
+# ----------------------------------------------------------------------------
 #  FASE 11 — Nginx
 # ----------------------------------------------------------------------------
 setup_nginx() {
@@ -504,6 +521,7 @@ main() {
             deploy_files
             compose_up
             wait_health
+            verify_hooks
             setup_nginx
             setup_ssl
             setup_ufw
@@ -516,6 +534,7 @@ main() {
             deploy_files
             compose_up
             wait_health
+            verify_hooks
             systemctl reload nginx >/dev/null 2>&1 || true
             self_test
             ;;

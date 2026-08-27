@@ -1,107 +1,248 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  HUB LEADS — Diagnóstico de saúde
-#  Verifica containers, SSL, DNS, espaço, UFW, logging
+#  HUB LEADS — DOCTOR (diagnóstico completo + log)
+#  Uso:  sudo bash ~/hublead/infra/doctor
+#        (ou a cópia em produção:  sudo bash /opt/hubleads/doctor)
+#
+#  O que faz:
+#   1) Faz "câmera lenta" de TODO o ambiente (sistema, docker, nginx, ssl, dns,
+#      ufw, .env, backup, systemd) e do fluxo de OCR.
+#   2) Investiga especificamente a causa do bug do hook /api/extract-card:
+#      - qual compose está de pé e o mount real do pb_hooks
+#      - se /opt/hubleads/pb_hooks/ocr.pb.js diverge do repo (drift)
+#      - se a rota /api/extract-card está registrada (405 vs 404)
+#      - formatação do erro de POST (revela se o hook carregou de verdade)
+#      - logs do PocketBase (panic / SafeWrap / restart do hook)
+#      - se o Ollama responde (no host e de dentro do container)
+#   3) GRAVA TUDO num log com timestamp e também imprime no terminal.
+#
+#  NÃO aborta no meio: mesmo com falhas, coleta o máximo possível.
 # =============================================================================
-set -Eeuo pipefail
+set -o pipefail
 
+# ---------------------------------------------------------------- config ----
 APP_DIR="/opt/hubleads"
-ENV_FILE="${APP_DIR}/.env"
-C_RESET="\e[0m"; C_RED="\e[31m"; C_GREEN="\e[32m"; C_YELLOW="\e[33m"; C_CYAN="\e[36m"
+ENV_FILE="$APP_DIR/.env"
+# Log com timestamp — este arquivo é o que deve ser enviado para análise.
+LOG="$APP_DIR/doctor-$(date +%Y%m%d-%H%M%S).log"
+# Best-effort: caminho do hook no clone de desenvolvimento, se existir.
+REPO_HOOK="$HOME/hublead/pb_hooks/ocr.pb.js"
+# Se o REPO_HOOK não for encontrado, tenta a raiz de onde o doctor foi invocado.
+[ -f "$REPO_HOOK" ] || REPO_HOOK="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/pb_hooks/ocr.pb.js"
+HOST_PB="http://127.0.0.1:8090"
+
 PASS=0; FAIL=0; WARN=0
 
+mkdir -p "$APP_DIR" 2>/dev/null || true
+: > "$LOG"
+chmod 644 "$LOG" 2>/dev/null || true
+
+# Envia para o terminal E grava no log ao mesmo tempo.
+tee_all() { tee -a "$LOG"; }
+
 check() {
-    local name="$1" status="$2"
+    local name="$1" status="$2" label
     case "$status" in
-        pass) echo -e "  ${C_GREEN}✓${C_RESET} $name"; PASS=$((PASS+1)) ;;
-        fail) echo -e "  ${C_RED}✗${C_RESET} $name"; FAIL=$((FAIL+1)) ;;
-        warn) echo -e "  ${C_YELLOW}~${C_RESET} $name"; WARN=$((WARN+1)) ;;
+        pass) label="[OK]";   PASS=$((PASS+1)) ;;
+        fail) label="[FAIL]"; FAIL=$((FAIL+1)) ;;
+        warn) label="[WARN]"; WARN=$((WARN+1)) ;;
     esac
+    printf '  %s %s\n' "$label" "$name" | tee_all
 }
 
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║     HUB LEADS — Diagnóstico de Saúde     ║"
-echo "╚══════════════════════════════════════════╝"
-echo ""
+hr() { printf '%s\n' '----------------------------------------------------------------------------' | tee_all; }
+sec() { printf '\n== %s ==\n' "$1" | tee_all; }
 
-# 1. Sistema
-echo "── Sistema"
-check "Ubuntu 24.04" "$(grep -q "Ubuntu 24.04" /etc/os-release 2>/dev/null && echo pass || echo warn)"
-check "Swap" "$(swapon --show | grep -q . && echo pass || echo warn)"
-check "Espaço em disco" "$(df -h / | awk 'NR==2{print $5}' | grep -qE '^[0-9]?[0-9]%' && echo pass || echo warn)"
+# --------------------------------------------------------------- banner ----
+echo "" | tee_all
+printf '%s\n' '=====================================================' | tee_all
+printf '%s\n' '   HUB LEADS - DOCTOR (diagnostico completo)'          | tee_all
+printf '%s\n' '=====================================================' | tee_all
+echo "" | tee_all
+printf '%s\n' "Iniciado: $(date '+%Y-%m-%d %H:%M:%S %Z')" | tee_all
+printf '%s\n' "Log completo: $LOG" | tee_all
+printf '%s\n' "Host: $(hostname 2>/dev/null) | User: $(whoami 2>/dev/null)" | tee_all
+hr | tee_all
 
-# 2. Docker
-echo "── Docker"
+# ============================================================ 1. SISTEMA =====
+sec "SISTEMA"
+printf '%s\n' "> uname:" | tee_all; uname -a | tee_all
+printf '%s\n' "> /etc/os-release:" | tee_all; (grep -E 'PRETTY_NAME|VERSION_ID' /etc/os-release 2>/dev/null || echo "sem /etc/os-release") | tee_all
+printf '%s\n' "> Uptime / Load:" | tee_all; uptime | tee_all
+printf '%s\n' "> Memoria (MB):" | tee_all; free -m | tee_all
+printf '%s\n' "> Disco (/):" | tee_all; df -h / | tee_all
+printf '%s\n' "> Swap:" | tee_all; swapon --show 2>/dev/null | tee_all || true
+check "Ubuntu 24.04" "$(grep -q 'Ubuntu 24.04' /etc/os-release 2>/dev/null && echo pass || echo warn)"
+check "Swap presente" "$(swapon --show 2>/dev/null | grep -q . && echo pass || echo warn)"
+DISK_USED=$(df -h / | awk 'NR==2{print $5}' | tr -d '%')
+if [ -n "$DISK_USED" ] && [ "$DISK_USED" -lt 85 ]; then check "Disco usado $DISK_USED%" pass; else check "Disco usado $DISK_USED%" warn; fi
+hr | tee_all
+
+# ============================================================ 2. DOCKER =====
+sec "DOCKER"
 check "Docker instalado" "$(command -v docker >/dev/null 2>&1 && echo pass || echo fail)"
+printf '%s\n' "> docker version (server):" | tee_all; docker version 2>&1 | grep -A2 -iE 'Server|Version' | tee_all || true
 check "Docker Compose" "$(docker compose version >/dev/null 2>&1 && echo pass || echo fail)"
-if command -v docker >/dev/null 2>&1; then
-    for c in hubleads-pocketbase; do
-        if docker ps --format '{{.Names}}' | grep -q "$c"; then
-            check "$c" pass
-        else
-            check "$c" fail
-        fi
-    done
+printf '%s\n' "> docker compose version:" | tee_all; docker compose version 2>&1 | tee_all || true
+
+printf '%s\n' "> Containers hubleads (todos, com status):" | tee_all
+docker ps -a --filter name=hubleads --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' 2>&1 | tee_all || true
+
+if docker ps --format '{{.Names}}' | grep -q hubleads-pocketbase; then
+    check "Container hubleads-pocketbase rodando" pass
+else
+    check "Container hubleads-pocketbase rodando" fail
 fi
+printf '%s\n' "> RestartCount do pocketbase:" | tee_all
+docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} Status={{.State.Status}} Health={{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' hubleads-pocketbase 2>&1 | tee_all || true
 
-# 3. Nginx
-echo "── Nginx"
+printf '%s\n' "> Compose ATIVO ($APP_DIR/compose.yaml):" | tee_all
+cat "$APP_DIR/compose.yaml" 2>&1 | tee_all || true
+
+# ---------------------------------------------------------- mounts pb_hooks --
+sec "MOUNT pb_hooks (origem do drift)"
+printf '%s\n' "> Mounts reais do hubleads-pocketbase:" | tee_all
+docker inspect hubleads-pocketbase --format '{{range .Mounts}}{{.Type}} | {{.Source}} -> {{.Destination}} | rw={{.RW}}{{println}}{{end}}' 2>&1 | tee_all || true
+
+printf '%s\n' "> $APP_DIR/pb_hooks (conteudo):" | tee_all
+ls -la "$APP_DIR/pb_hooks" 2>&1 | tee_all || true
+
+printf '%s\n' "> diff $APP_DIR/pb_hooks/ocr.pb.js  <->  repo (drift):" | tee_all
+if [ -f "$APP_DIR/pb_hooks/ocr.pb.js" ] && [ -f "$REPO_HOOK" ]; then
+    diff -u "$APP_DIR/pb_hooks/ocr.pb.js" "$REPO_HOOK" | tee_all && echo "(sem diferencas)" | tee_all
+    printf '%s\n' "> md5sum:" | tee_all
+    md5sum "$APP_DIR/pb_hooks/ocr.pb.js" "$REPO_HOOK" 2>&1 | tee_all || true
+else
+    printf '%s\n' "  Nao foi possivel comparar (faltam arquivos). Verificar paths:" | tee_all
+    printf '%s\n' "  PROD: $APP_DIR/pb_hooks/ocr.pb.js   REPO: $REPO_HOOK" | tee_all
+fi
+hr | tee_all
+
+# ========================================================== 3. POCKETBASE =====
+sec "POCKETBASE - API & ROTA OCR"
+printf '%s\n' "> GET /api/health:" | tee_all
+curl -s -m 8 -w '\nHTTP=%{http_code}\n' "$HOST_PB/api/health" 2>&1 | tee_all || echo "(falha de conexao)" | tee_all
+
+printf '%s\n' "> GET /api/extract-card (se a rota existir -> 405; se nao -> 404):" | tee_all
+curl -s -m 8 -o /dev/null -w 'GET /api/extract-card -> HTTP %{http_code}\n' -X GET "$HOST_PB/api/extract-card" 2>&1 | tee_all || true
+ROUTE_CODE=$(curl -s -m 8 -o /dev/null -w '%{http_code}' -X GET "$HOST_PB/api/extract-card" 2>/dev/null || echo "000")
+if [ "$ROUTE_CODE" = "405" ]; then check "Rota /api/extract-card REGISTRADA (405)" pass
+elif [ "$ROUTE_CODE" = "404" ]; then check "Rota /api/extract-card NAO registrada (404)" fail
+else check "Rota /api/extract-card respondeu $ROUTE_CODE" warn; fi
+
+printf '%s\n' "> POST /api/extract-card com body vazio (formato do erro revela se o hook carregou):" | tee_all
+printf '%s\n' '  - Hook carregado  -> 400 {"success":false,"error":"Nenhuma imagem..."}' | tee_all
+printf '%s\n' '  - Hook NAO carregado -> 404/400 generico do PocketBase {"data":{},"message":"..."}' | tee_all
+curl -s -m 8 -w '\nPOST-empty -> HTTP %{http_code}\n' -X POST "$HOST_PB/api/extract-card" -H 'Content-Type: application/json' -d '{}' 2>&1 | tee_all || true
+
+printf '%s\n' "> Logs PocketBase (ultimas 100 linhas, com timestamp):" | tee_all
+docker logs hubleads-pocketbase --timestamps --tail 100 2>&1 | tee_all || true
+
+printf '%s\n' "> Logs PocketBase - filtro erro/panic/hook/ocr (ultimas 60):" | tee_all
+docker logs hubleads-pocketbase 2>&1 | grep -iE 'panic|safewrap|recover|ocr|extract|hook|error|fatal' | tail -60 | tee_all || true
+hr | tee_all
+
+# ============================================================= 4. OLLAMA =====
+sec "OLLAMA (modelo de visao do OCR)"
+printf '%s\n' "> No HOST (127.0.0.1:11434):" | tee_all
+curl -s -m 6 -o /dev/null -w 'GET /api/tags -> HTTP %{http_code}\n' http://127.0.0.1:11434/api/tags 2>&1 | tee_all || echo "(host: Ollama nao responde em 127.0.0.1:11434)" | tee_all
+printf '%s\n' "> Modelos instalados no host:" | tee_all
+curl -s -m 6 http://127.0.0.1:11434/api/tags 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print([m.get("name") for m in d.get("models",[])])' 2>&1 | tee_all || true
+
+printf '%s\n' "> DENTRO do container (host.docker.internal):" | tee_all
+docker exec hubleads-pocketbase sh -c 'wget -q -O- --timeout=6 http://host.docker.internal:11434/api/tags 2>&1 | head -c 500' 2>&1 | tee_all || echo "(container: Ollama inacessivel via host.docker.internal)" | tee_all
+echo "" | tee_all
+hr | tee_all
+
+# ============================================================ 5. NGINX ======
+sec "NGINX"
 check "Nginx ativo" "$(systemctl is-active nginx >/dev/null 2>&1 && echo pass || echo fail)"
-check "Site habilitado" "$([ -f /etc/nginx/sites-enabled/hublead.conf ] && echo pass || echo fail)"
+printf '%s\n' "> nginx -t:" | tee_all; nginx -t 2>&1 | tee_all || true
+printf '%s\n' "> sites-enabled:" | tee_all; ls -la /etc/nginx/sites-enabled/ 2>&1 | tee_all || true
+printf '%s\n' "> trechos de proxy/8090/extract no site:" | tee_all
+grep -nE 'proxy_pass|8090|extract-card|server_name|listen' /etc/nginx/sites-available/hublead.conf 2>&1 | tee_all || true
+printf '%s\n' "> nginx error.log (ultimas 30):" | tee_all; tail -30 /var/log/nginx/error.log 2>&1 | tee_all || true
+printf '%s\n' "> nginx access.log (ultimas 20, filter extract):" | tee_all; grep -iE 'extract|8090' /var/log/nginx/access.log 2>/dev/null | tail -20 | tee_all || echo "(sem linhas de extract no access.log)" | tee_all
+hr | tee_all
 
-# 4. SSL
-echo "── SSL"
+# ============================================================== 6. SSL ======
+sec "SSL / CERTBOT"
 CHECK_CERT=$(certbot certificates 2>/dev/null | grep -c "Certificate Name" || true)
 if [ "$CHECK_CERT" -gt 0 ]; then
-    DOMAIN=$(grep DOMAIN "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "hublead.pradodacostasolucoes.com.br")
-    certbot certificates 2>/dev/null | grep -A2 "$DOMAIN"
-    check "Certificado SSL" pass
+    certbot certificates 2>&1 | tee_all || true
+    check "Certificado SSL emitido" pass
 else
     check "Certificado SSL" warn
+    printf '%s\n' "  certbot nao retornou certificados (provavel instalacao HTTP-only)." | tee_all
 fi
+hr | tee_all
 
-# 5. Portas
-echo "── Portas seguras"
-PUBLIC_PORTS=$(ss -tlnp 2>/dev/null | grep -E "0.0.0.0:|:::" | grep -E ":8080|:8090" || true)
-if [ -z "$PUBLIC_PORTS" ]; then
-    check "8080/8090 não expostas" pass
+# ============================================================= 7. PORTAS ====
+sec "PORTAS"
+printf '%s\n' "> Escutas em 8080/8090/11434 (deve estar 127.0.0.1, nao 0.0.0.0):" | tee_all
+ss -tlnp 2>/dev/null | grep -E ':8080|:8090|:11434' | tee_all || echo "(nenhuma escuta nesses portas)" | tee_all
+if ss -tlnp 2>/dev/null | grep -E '0.0.0.0:|:::' | grep -qE ':8080|:8090'; then
+    check "8080/8090 NAO expostas publicamente" fail
 else
-    check "8080/8090 expostas" fail
+    check "8080/8090 NAO expostas publicamente" pass
 fi
+hr | tee_all
 
-# 6. UFW
-echo "── UFW"
-check "UFW ativo" "$(ufw status 2>/dev/null | grep -q "Status: active" && echo pass || echo warn)"
+# =============================================================== 8. UFW =====
+sec "UFW"
+printf '%s\n' "> ufw status:" | tee_all; ufw status 2>&1 | tee_all || true
+check "UFW ativo" "$(ufw status 2>/dev/null | grep -q 'Status: active' && echo pass || echo warn)"
+hr | tee_all
 
-# 7. .env
-echo "── Segurança"
+# ============================================================== 9. ENV ======
+sec ".env"
 if [ -f "$ENV_FILE" ]; then
     PERMS=$(stat -c%a "$ENV_FILE" 2>/dev/null || stat -f%p "$ENV_FILE" 2>/dev/null)
+    printf '%s\n' "> permissoes: $PERMS" | tee_all
     check ".env existe e modo 600" "$(echo "$PERMS" | grep -qE '600|100600' && echo pass || echo warn)"
+    printf '%s\n' "> chaves do .env (valores ocultados):" | tee_all
+    sed -E 's/=.*/=<redacted>/' "$ENV_FILE" 2>&1 | tee_all || true
 else
-    check ".env não encontrado" fail
+    check ".env nao encontrado" fail
 fi
+hr | tee_all
 
-# 8. DNS
-echo "── DNS"
-DOMAIN=$(grep DOMAIN "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "hublead.pradodacostasolucoes.com.br")
-check "Resolução DNS de $DOMAIN" "$(nslookup "$DOMAIN" 2>/dev/null | grep -q 'Address' && echo pass || echo warn)"
+# =============================================================== 10. DNS ====
+sec "DNS"
+DOMAIN=$(grep -E '^DOMAIN=' "$ENV_FILE" 2>/dev/null | head -n1 | cut -d= -f2-)
+[ -n "$DOMAIN" ] || DOMAIN="hublead.pradodacostasolucoes.com.br"
+printf '%s\n' "> nslookup $DOMAIN:" | tee_all; nslookup "$DOMAIN" 2>&1 | tee_all || true
+check "Resolucao DNS de $DOMAIN" "$(nslookup "$DOMAIN" 2>/dev/null | grep -q 'Address' && echo pass || echo warn)"
+hr | tee_all
 
-# 9. Backup
-echo "── Backup"
-BACKUP_DIR="${APP_DIR}/backups"
-BKP_CNT=$(find "$BACKUP_DIR" -name "hubleads_*.tar.gz" 2>/dev/null | wc -l)
-if [ "$BKP_CNT" -gt 0 ]; then
-    check "Backups disponíveis ($BKP_CNT arquivos)" pass
+# =========================================================== 11. BACKUP =====
+sec "BACKUP"
+BKP_CNT=$(find "$APP_DIR/backups" -name 'hubleads_*.tar.gz' 2>/dev/null | wc -l)
+if [ "$BKP_CNT" -gt 0 ]; then check "Backups disponiveis ($BKP_CNT arquivos)" pass; else check "Nenhum backup encontrado" warn; fi
+printf '%s\n' "> backup.sh instalado em $APP_DIR?" | tee_all
+ls -la "$APP_DIR/backup.sh" 2>&1 | tee_all || true
+hr | tee_all
+
+# ========================================================== 12. SYSTEMD =====
+sec "SYSTEMD / SERVICOS"
+if [ -f /etc/systemd/system/hubleads.service ]; then
+    systemctl status hubleads.service --no-pager 2>&1 | tee_all || true
 else
-    check "Nenhum backup encontrado" warn
+    printf '%s\n' "  hubleads.service nao presente (app gerido via compose docker)." | tee_all
 fi
+printf '%s\n' "> systemctl status nginx:" | tee_all; systemctl status nginx --no-pager 2>&1 | tee_all || true
+hr | tee_all
 
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║  Resumo: ${PASS} ok · ${FAIL} falha(s) · ${WARN} aviso(s)  ║"
-echo "╚══════════════════════════════════════════╝"
-echo ""
+# ============================================================ RESUMO ========
+sec "RESUMO"
+printf '%s\n' "  $PASS ok | $FAIL falha(s) | $WARN aviso(s)" | tee_all
+echo "" | tee_all
+printf '%s\n' '=====================================================================' | tee_all
+printf '%s\n' " Envie o conteudo do arquivo abaixo para a analise:" | tee_all
+printf '%s\n' "   $LOG" | tee_all
+printf '%s\n' " (ou copie/cole a saida do terminal inteira)" | tee_all
+printf '%s\n' '=====================================================================' | tee_all
+echo "" | tee_all
 
-[ "$FAIL" -eq 0 ] || exit 1
+# Sempre sai 0: o objetivo e coletar diagnostico, nao "falhar" no meio.
+exit 0
